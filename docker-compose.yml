@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: leave-management-db
+    environment:
+      POSTGRES_DB: leave_management
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - leave_pg_data:/var/lib/postgresql/data
+
+volumes:
+  leave_pg_data:
