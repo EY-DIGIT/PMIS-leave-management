@@ -4,6 +4,7 @@ import com.example.leavemanagement.dto.CalendarSummary;
 import com.example.leavemanagement.dto.HolidayItem;
 import com.example.leavemanagement.dto.HolidayUploadRequest;
 import com.example.leavemanagement.dto.MonthCalendarSummary;
+import com.example.leavemanagement.dto.WeekendDates;
 import com.example.leavemanagement.dto.YearCalendarSummary;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
@@ -138,6 +139,12 @@ public class HolidayService {
             for (int m = 1; m <= 12; m++) {
                 months.add(monthSummary(year, m));
             }
+            List<LocalDate> saturdayDates = months.stream()
+                    .flatMap(ms -> ms.weekends().get(0).saturdayDates().stream())
+                    .toList();
+            List<LocalDate> sundayDates = months.stream()
+                    .flatMap(ms -> ms.weekends().get(0).sundayDates().stream())
+                    .toList();
             return new CalendarSummary(
                     year,
                     null,
@@ -145,6 +152,7 @@ public class HolidayService {
                     year_.saturdays(),
                     year_.sundays(),
                     year_.totalWeekendDays(),
+                    List.of(new WeekendDates(saturdayDates, sundayDates)),
                     year_.publicHolidayCount(),
                     year_.publicHolidays(),
                     months);
@@ -158,6 +166,7 @@ public class HolidayService {
                 m.saturdays(),
                 m.sundays(),
                 m.totalWeekendDays(),
+                m.weekends(),
                 m.publicHolidayCount(),
                 m.publicHolidays(),
                 List.of());
@@ -167,14 +176,15 @@ public class HolidayService {
         LocalDate start = LocalDate.of(year, month, 1);
         int lengthOfMonth = start.lengthOfMonth();
 
-        int saturdays = 0;
-        int sundays = 0;
+        List<LocalDate> saturdayDates = new ArrayList<>();
+        List<LocalDate> sundayDates = new ArrayList<>();
         for (int day = 1; day <= lengthOfMonth; day++) {
-            DayOfWeek dow = LocalDate.of(year, month, day).getDayOfWeek();
+            LocalDate date = LocalDate.of(year, month, day);
+            DayOfWeek dow = date.getDayOfWeek();
             if (dow == DayOfWeek.SATURDAY) {
-                saturdays++;
+                saturdayDates.add(date);
             } else if (dow == DayOfWeek.SUNDAY) {
-                sundays++;
+                sundayDates.add(date);
             }
         }
 
@@ -184,7 +194,9 @@ public class HolidayService {
         String monthName = start.getMonth().getDisplayName(TextStyle.FULL, Locale.ENGLISH);
 
         return new MonthCalendarSummary(
-                year, month, monthName, lengthOfMonth, saturdays, sundays, saturdays + sundays,
+                year, month, monthName, lengthOfMonth,
+                saturdayDates.size(), sundayDates.size(), saturdayDates.size() + sundayDates.size(),
+                List.of(new WeekendDates(List.copyOf(saturdayDates), List.copyOf(sundayDates))),
                 holidays.size(), holidays);
     }
 

@@ -97,9 +97,10 @@ class AttendanceLeaveServiceTest {
     void summaryCountsWeekendsHolidaysLeavesAndShortDays() {
         // June 2026: Saturdays 6,13,20,27; Sundays 7,14,21,28 -> 4 + 4.
         // Absent Mon 8 (working) -> 1 leave day. Worked minutes: day2=7.5h and day4=5h
-        // are under 8h (2 short days); day1=8h and day3=9h are not.
+        // day2=7.5h and day4=5h are short (>4,<8); day5=3h is a half day (<=4h);
+        // day1=8h and day3=9h are full days.
         EmployeeAttendance e = new EmployeeAttendance(
-                "E1", "Asha", "Dev", Set.of(8), Map.of(1, 480, 2, 450, 3, 540, 4, 300));
+                "E1", "Asha", "Dev", Set.of(8), Map.of(1, 480, 2, 450, 3, 540, 4, 300, 5, 180));
         when(parser.parse(any())).thenReturn(List.of(e));
         when(directory.findByAttendanceId("E1"))
                 .thenReturn(Optional.of(new EmployeeInfo("E1", "Asha Kumar", "Dev", null)));
@@ -118,7 +119,13 @@ class AttendanceLeaveServiceTest {
         assertThat(emp.employeeName()).isEqualTo("Asha Kumar");
         assertThat(emp.leaveDays()).isEqualTo(1);
         assertThat(emp.shortHourDays()).isEqualTo(2);
-        assertThat(emp.shortHourDayNumbers()).containsExactly(2, 4);
+        // >4 and <8 hours -> shortHours showing hours NOT worked (8h - worked)
+        assertThat(emp.shortHours())
+                .containsEntry("02-06-2026", "0.5 hrs") // worked 7.5h -> 0.5h short
+                .containsEntry("04-06-2026", "3 hrs") // worked 5h -> 3h short
+                .hasSize(2);
+        // <=4 hours -> halfDays (date only)
+        assertThat(emp.halfDays()).containsExactly("05-06-2026");
     }
 
     @Test

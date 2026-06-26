@@ -102,7 +102,7 @@ class AttendanceQueryServiceTest {
         row.setWorkedMinutesByDay(Map.of(1, 480, 2, 420));
         when(attendanceRepository.findByYearAndMonth(2024, 6)).thenReturn(List.of(row));
         MonthlyAttendanceSummary sentinel =
-                new MonthlyAttendanceSummary(2024, 6, 30, 4, 4, 8, 0, List.of(), 1, List.of());
+                new MonthlyAttendanceSummary(2024, 6, 30, 4, 4, 8, List.of(), 0, List.of(), 1, List.of());
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<EmployeeAttendance>> captor = ArgumentCaptor.forClass(List.class);
         when(attendanceLeaveService.buildSummary(eq(2024), eq(6), captor.capture())).thenReturn(sentinel);
@@ -123,9 +123,9 @@ class AttendanceQueryServiceTest {
         when(attendanceRepository.findByYear(2024))
                 .thenReturn(List.of(row("E1", "Asha", 2024, 6, Set.of(3)), row("E1", "Asha", 2024, 4, Set.of(2))));
         MonthlyAttendanceSummary aprSummary =
-                new MonthlyAttendanceSummary(2024, 4, 30, 4, 4, 8, 0, List.of(), 1, List.of());
+                new MonthlyAttendanceSummary(2024, 4, 30, 4, 4, 8, List.of(), 0, List.of(), 1, List.of());
         MonthlyAttendanceSummary junSummary =
-                new MonthlyAttendanceSummary(2024, 6, 30, 4, 4, 8, 0, List.of(), 1, List.of());
+                new MonthlyAttendanceSummary(2024, 6, 30, 4, 4, 8, List.of(), 0, List.of(), 1, List.of());
         when(attendanceLeaveService.buildSummary(eq(2024), eq(4), any())).thenReturn(aprSummary);
         when(attendanceLeaveService.buildSummary(eq(2024), eq(6), any())).thenReturn(junSummary);
 
@@ -151,7 +151,7 @@ class AttendanceQueryServiceTest {
                 .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of(6, 500))));
         when(attendanceRepository.findByYearAndMonth(2026, 5)).thenReturn(List.of()); // no existing rows
         MonthlyAttendanceSummary sentinel =
-                new MonthlyAttendanceSummary(2026, 5, 31, 5, 4, 9, 0, List.of(), 1, List.of());
+                new MonthlyAttendanceSummary(2026, 5, 31, 5, 4, 9, List.of(), 0, List.of(), 1, List.of());
         when(attendanceLeaveService.buildSummary(eq(2026), eq(5), any())).thenReturn(sentinel);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});

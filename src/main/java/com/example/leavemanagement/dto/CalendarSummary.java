@@ -22,6 +22,7 @@ public record CalendarSummary(
         int saturdays,
         int sundays,
         int totalWeekendDays,
+        List<WeekendDates> weekends,
         int publicHolidayCount,
         List<HolidayItem> publicHolidays,
         List<MonthCalendarSummary> months) {}

@@ -264,7 +264,8 @@ Response:
       "designation": "Dev",
       "leaveDays": 1,
       "shortHourDays": 2,
-      "shortHourDayNumbers": [ 2, 4 ]
+      "shortHours": { "02-06-2026": "0.5 hrs", "04-06-2026": "3 hrs" },
+      "halfDays": [ "05-06-2026" ]
     }
   ]
 }

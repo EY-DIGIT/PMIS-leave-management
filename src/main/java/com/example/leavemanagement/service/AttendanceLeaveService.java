@@ -8,13 +8,17 @@ import com.example.leavemanagement.dto.HolidayItem;
 import com.example.leavemanagement.dto.LeaveApplyRequest;
 import com.example.leavemanagement.dto.LeaveResponse;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
+import com.example.leavemanagement.dto.WeekendDates;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -37,6 +41,8 @@ import org.springframework.web.multipart.MultipartFile;
 public class AttendanceLeaveService {
 
     private static final int FULL_DAY_MINUTES = 8 * 60; // a day under this counts as a "short" day
+    private static final int HALF_DAY_MINUTES = 4 * 60; // a day at/under this is a "half day"
+    private static final DateTimeFormatter DAY_MONTH_YEAR = DateTimeFormatter.ofPattern("dd-MM-yyyy", Locale.ENGLISH);
 
     private final AttendanceExcelParser parser;
     private final EmployeeDirectoryClient directory;
@@ -111,16 +117,19 @@ public class AttendanceLeaveService {
                 .map(h -> new HolidayItem(h.getHolidayDate(), h.getName()))
                 .toList();
 
-        int saturdays = 0;
-        int sundays = 0;
+        List<LocalDate> saturdayDates = new ArrayList<>();
+        List<LocalDate> sundayDates = new ArrayList<>();
         for (int day = 1; day <= lengthOfMonth; day++) {
-            DayOfWeek dow = LocalDate.of(year, month, day).getDayOfWeek();
+            LocalDate date = LocalDate.of(year, month, day);
+            DayOfWeek dow = date.getDayOfWeek();
             if (dow == DayOfWeek.SATURDAY) {
-                saturdays++;
+                saturdayDates.add(date);
             } else if (dow == DayOfWeek.SUNDAY) {
-                sundays++;
+                sundayDates.add(date);
             }
         }
+        int saturdays = saturdayDates.size();
+        int sundays = sundayDates.size();
 
         List<EmployeeAttendanceSummary> employees = new ArrayList<>();
         for (EmployeeAttendance employee : attendance) {
@@ -130,19 +139,30 @@ public class AttendanceLeaveService {
                     .filter(date -> isWorkingDay(date, holidayDates))
                     .count();
 
-            List<Integer> shortHourDays = employee.workedMinutesByDay().entrySet().stream()
+            Map<String, String> shortHours = new LinkedHashMap<>();
+            List<String> halfDays = new ArrayList<>();
+            employee.workedMinutesByDay().entrySet().stream()
                     .filter(e -> e.getValue() < FULL_DAY_MINUTES)
-                    .map(Map.Entry::getKey)
-                    .sorted()
-                    .toList();
+                    .filter(e -> e.getKey() >= 1 && e.getKey() <= lengthOfMonth)
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(e -> {
+                        String date = LocalDate.of(year, month, e.getKey()).format(DAY_MONTH_YEAR);
+                        if (e.getValue() <= HALF_DAY_MINUTES) {
+                            halfDays.add(date); // 4 hours or less -> half day (date only)
+                        } else {
+                            // >4 and <8 hours -> short day; show the hours NOT worked (shortfall vs 8h)
+                            shortHours.put(date, formatHours(FULL_DAY_MINUTES - e.getValue()));
+                        }
+                    });
 
             employees.add(new EmployeeAttendanceSummary(
                     employee.attendanceId(),
                     resolveName(employee),
                     employee.designation(),
                     leaveDays,
-                    shortHourDays.size(),
-                    shortHourDays));
+                    shortHours.size(),
+                    shortHours,
+                    halfDays));
         }
 
         return new MonthlyAttendanceSummary(
@@ -152,10 +172,20 @@ public class AttendanceLeaveService {
                 saturdays,
                 sundays,
                 saturdays + sundays,
+                List.of(new WeekendDates(List.copyOf(saturdayDates), List.copyOf(sundayDates))),
                 publicHolidays.size(),
                 publicHolidays,
                 employees.size(),
                 employees);
+    }
+
+    /** Formats worked minutes as a friendly "X hrs" string (e.g. 150 -> "2.5 hrs", 420 -> "7 hrs"). */
+    private String formatHours(int minutes) {
+        double hours = minutes / 60.0;
+        String value = hours == Math.floor(hours)
+                ? Integer.toString((int) hours)
+                : Double.toString(Math.round(hours * 100.0) / 100.0);
+        return value + " hrs";
     }
 
     private void validateMonthAndYear(int year, int month) {

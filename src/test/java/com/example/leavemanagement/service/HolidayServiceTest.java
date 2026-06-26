@@ -117,6 +117,12 @@ class HolidayServiceTest {
         assertThat(summary.totalDays()).isEqualTo(30);
         assertThat(summary.saturdays()).isEqualTo(4);
         assertThat(summary.sundays()).isEqualTo(4);
+        assertThat(summary.weekends().get(0).saturdayDates())
+                .containsExactly(
+                        LocalDate.of(2026, 6, 6),
+                        LocalDate.of(2026, 6, 13),
+                        LocalDate.of(2026, 6, 20),
+                        LocalDate.of(2026, 6, 27));
         assertThat(summary.publicHolidayCount()).isEqualTo(1);
         assertThat(summary.publicHolidays()).extracting("name").containsExactly("June Holiday");
         assertThat(summary.months()).isEmpty();
@@ -132,6 +138,10 @@ class HolidayServiceTest {
         assertThat(summary.totalDays()).isEqualTo(365);
         assertThat(summary.saturdays()).isEqualTo(52);
         assertThat(summary.sundays()).isEqualTo(52);
+        assertThat(summary.weekends().get(0).saturdayDates())
+                .hasSize(52)
+                .allMatch(d -> d.getDayOfWeek() == java.time.DayOfWeek.SATURDAY);
+        assertThat(summary.weekends().get(0).sundayDates()).hasSize(52);
         assertThat(summary.months()).hasSize(12);
         assertThat(summary.months().get(5).month()).isEqualTo(6);
         assertThat(summary.months().get(5).monthName()).isEqualTo("June");

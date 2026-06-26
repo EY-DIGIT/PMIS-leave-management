@@ -11,6 +11,7 @@ import java.util.List;
  * @param saturdays count of Saturdays in the month
  * @param sundays count of Sundays in the month
  * @param totalWeekendDays saturdays + sundays
+ * @param weekends single-element array holding the Saturday and Sunday dates
  * @param publicHolidayCount number of stored public holidays that fall in the month
  * @param publicHolidays those public holidays (date + name)
  * @param employeeCount number of employees in the sheet
@@ -23,6 +24,7 @@ public record MonthlyAttendanceSummary(
         int saturdays,
         int sundays,
         int totalWeekendDays,
+        List<WeekendDates> weekends,
         int publicHolidayCount,
         List<HolidayItem> publicHolidays,
         int employeeCount,
