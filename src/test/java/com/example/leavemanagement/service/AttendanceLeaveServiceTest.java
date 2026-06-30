@@ -16,6 +16,8 @@ import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.entity.LeaveStatus;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.repository.ProjectConfigRepository;
+import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,12 @@ class AttendanceLeaveServiceTest {
 
     @Mock
     private LeaveService leaveService;
+
+    @Mock
+    private ResourceProjectMappingRepository resourceProjectMappingRepository;
+
+    @Mock
+    private ProjectConfigRepository projectConfigRepository;
 
     @InjectMocks
     private AttendanceLeaveService service;

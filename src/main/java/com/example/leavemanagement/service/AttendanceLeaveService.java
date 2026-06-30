@@ -11,7 +11,9 @@ import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.dto.WeekendDates;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
+import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -48,16 +50,22 @@ public class AttendanceLeaveService {
     private final EmployeeDirectoryClient directory;
     private final PublicHolidayRepository holidayRepository;
     private final LeaveService leaveService;
+    private final ResourceProjectMappingRepository resourceProjectMappingRepository;
+    private final ProjectConfigRepository projectConfigRepository;
 
     public AttendanceLeaveService(
             AttendanceExcelParser parser,
             EmployeeDirectoryClient directory,
             PublicHolidayRepository holidayRepository,
-            LeaveService leaveService) {
+            LeaveService leaveService,
+            ResourceProjectMappingRepository resourceProjectMappingRepository,
+            ProjectConfigRepository projectConfigRepository) {
         this.parser = parser;
         this.directory = directory;
         this.holidayRepository = holidayRepository;
         this.leaveService = leaveService;
+        this.resourceProjectMappingRepository = resourceProjectMappingRepository;
+        this.projectConfigRepository = projectConfigRepository;
     }
 
     @Transactional
@@ -133,6 +141,10 @@ public class AttendanceLeaveService {
 
         List<EmployeeAttendanceSummary> employees = new ArrayList<>();
         for (EmployeeAttendance employee : attendance) {
+            int[] thresholds = getThresholds(employee.attendanceId());
+            int fullDayMinutes = thresholds[0];
+            int halfDayMinutes = thresholds[1];
+
             int leaveDays = (int) employee.absentDays().stream()
                     .filter(day -> day >= 1 && day <= lengthOfMonth)
                     .map(day -> LocalDate.of(year, month, day))
@@ -141,17 +153,18 @@ public class AttendanceLeaveService {
 
             Map<String, String> shortHours = new LinkedHashMap<>();
             List<String> halfDays = new ArrayList<>();
+            final int fullDay = fullDayMinutes;
+            final int halfDay = halfDayMinutes;
             employee.workedMinutesByDay().entrySet().stream()
-                    .filter(e -> e.getValue() < FULL_DAY_MINUTES)
+                    .filter(e -> e.getValue() < fullDay)
                     .filter(e -> e.getKey() >= 1 && e.getKey() <= lengthOfMonth)
                     .sorted(Map.Entry.comparingByKey())
                     .forEach(e -> {
                         String date = LocalDate.of(year, month, e.getKey()).format(DAY_MONTH_YEAR);
-                        if (e.getValue() <= HALF_DAY_MINUTES) {
-                            halfDays.add(date); // 4 hours or less -> half day (date only)
+                        if (e.getValue() <= halfDay) {
+                            halfDays.add(date);
                         } else {
-                            // >4 and <8 hours -> short day; show the hours NOT worked (shortfall vs 8h)
-                            shortHours.put(date, formatHours(FULL_DAY_MINUTES - e.getValue()));
+                            shortHours.put(date, formatHours(fullDay - e.getValue()));
                         }
                     });
 
@@ -177,6 +190,13 @@ public class AttendanceLeaveService {
                 publicHolidays,
                 employees.size(),
                 employees);
+    }
+
+    private int[] getThresholds(String attendanceId) {
+        return resourceProjectMappingRepository.findById(attendanceId)
+                .map(m -> projectConfigRepository.findById(m.getProjectId()).orElse(null))
+                .map(c -> new int[]{c.getFullDayMinutes(), c.getHalfDayMinutes()})
+                .orElse(new int[]{FULL_DAY_MINUTES, HALF_DAY_MINUTES});
     }
 
     /** Formats worked minutes as a friendly "X hrs" string (e.g. 150 -> "2.5 hrs", 420 -> "7 hrs"). */

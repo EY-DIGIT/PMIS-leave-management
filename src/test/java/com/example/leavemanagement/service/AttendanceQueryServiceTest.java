@@ -15,8 +15,10 @@ import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.entity.ResourceMonthlyAttendance;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import com.example.leavemanagement.repository.ResourceMonthlyAttendanceRepository;
+import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +51,12 @@ class AttendanceQueryServiceTest {
     @Mock
     private AttendanceLeaveService attendanceLeaveService;
 
+    @Mock
+    private ResourceProjectMappingRepository resourceProjectMappingRepository;
+
+    @Mock
+    private ProjectConfigRepository projectConfigRepository;
+
     // Real engine — the quarter path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -57,7 +65,8 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         service = new AttendanceQueryService(
-                parser, attendanceRepository, holidayRepository, directory, policy, attendanceLeaveService);
+                parser, attendanceRepository, holidayRepository, directory, policy,
+                attendanceLeaveService, resourceProjectMappingRepository, projectConfigRepository);
     }
 
     @Test

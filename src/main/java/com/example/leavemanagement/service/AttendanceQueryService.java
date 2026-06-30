@@ -9,11 +9,16 @@ import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.ResourceQuarterSettlement;
+import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.entity.ResourceMonthlyAttendance;
+import com.example.leavemanagement.entity.ResourceProjectMapping;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import com.example.leavemanagement.repository.ResourceMonthlyAttendanceRepository;
+import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
+import java.util.Optional;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -42,6 +47,8 @@ public class AttendanceQueryService {
     private final EmployeeDirectoryClient directory;
     private final QuarterLeavePolicy policy;
     private final AttendanceLeaveService attendanceLeaveService;
+    private final ResourceProjectMappingRepository resourceProjectMappingRepository;
+    private final ProjectConfigRepository projectConfigRepository;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
@@ -49,13 +56,17 @@ public class AttendanceQueryService {
             PublicHolidayRepository holidayRepository,
             EmployeeDirectoryClient directory,
             QuarterLeavePolicy policy,
-            AttendanceLeaveService attendanceLeaveService) {
+            AttendanceLeaveService attendanceLeaveService,
+            ResourceProjectMappingRepository resourceProjectMappingRepository,
+            ProjectConfigRepository projectConfigRepository) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
         this.directory = directory;
         this.policy = policy;
         this.attendanceLeaveService = attendanceLeaveService;
+        this.resourceProjectMappingRepository = resourceProjectMappingRepository;
+        this.projectConfigRepository = projectConfigRepository;
     }
 
     /**
@@ -215,13 +226,27 @@ public class AttendanceQueryService {
             }
 
             EmployeeInfo info = directory.findByAttendanceId(attendanceId).orElse(null);
-            String employeeName = info != null && info.employeeName() != null && !info.employeeName().isBlank()
-                    ? info.employeeName()
-                    : sheetName;
-            LocalDate joiningDate = info != null ? info.joiningDate() : null;
+            ResourceProjectMapping mapping =
+                    resourceProjectMappingRepository.findById(attendanceId).orElse(null);
+
+            String mappingName = mapping != null && mapping.getEmployeeName() != null
+                    && !mapping.getEmployeeName().isBlank() ? mapping.getEmployeeName() : null;
+            String infoName = info != null && info.employeeName() != null
+                    && !info.employeeName().isBlank() ? info.employeeName() : null;
+            String employeeName = mappingName != null ? mappingName
+                    : (infoName != null ? infoName : sheetName);
+
+            LocalDate mappingJoining = mapping != null ? mapping.getJoiningDate() : null;
+            LocalDate joiningDate = mappingJoining != null ? mappingJoining
+                    : (info != null ? info.joiningDate() : null);
+
+            int maxLeaves = Optional.ofNullable(mapping)
+                    .map(m -> projectConfigRepository.findById(m.getProjectId()).orElse(null))
+                    .map(ProjectConfig::getMaxLeavesPerPeriod)
+                    .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
 
             QuarterLeaveCalculation calculation =
-                    policy.compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays);
+                    policy.compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves);
 
             settlements.add(new ResourceQuarterSettlement(attendanceId, employeeName, joiningDate, calculation));
         }

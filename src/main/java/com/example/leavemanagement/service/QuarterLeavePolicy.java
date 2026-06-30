@@ -90,15 +90,69 @@ public class QuarterLeavePolicy {
                 sandwichDates);
     }
 
+    public QuarterLeaveCalculation compute(
+            LocalDate quarterStart,
+            LocalDate quarterEnd,
+            LocalDate joiningDate,
+            Set<LocalDate> absentDates,
+            Set<LocalDate> holidays,
+            int maxLeavesPerPeriod) {
+
+        Set<LocalDate> holidaySet = holidays == null ? Set.of() : holidays;
+        LocalDate effectiveStart =
+                (joiningDate != null && joiningDate.isAfter(quarterStart)) ? joiningDate : quarterStart;
+
+        if (effectiveStart.isAfter(quarterEnd)) {
+            return new QuarterLeaveCalculation(0, 0, 0, 0, 0, 0, 0, List.of(), List.of(), List.of());
+        }
+
+        int permissible = permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, maxLeavesPerPeriod);
+
+        List<LocalDate> leaveDates = absentDates.stream()
+                .filter(d -> !d.isBefore(effectiveStart) && !d.isAfter(quarterEnd))
+                .filter(d -> isWorkingDay(d, holidaySet))
+                .sorted()
+                .toList();
+
+        int paidCount = Math.min(leaveDates.size(), permissible);
+        List<LocalDate> paidDates = List.copyOf(leaveDates.subList(0, paidCount));
+        List<LocalDate> unpaidDates = List.copyOf(leaveDates.subList(paidCount, leaveDates.size()));
+        Set<LocalDate> unpaidSet = new HashSet<>(unpaidDates);
+
+        List<LocalDate> sandwichDates =
+                sandwichDates(effectiveStart, quarterEnd, holidaySet, unpaidSet);
+
+        int unpaidLeave = unpaidDates.size();
+        int sandwich = sandwichDates.size();
+        int lapsed = Math.max(0, permissible - paidCount);
+
+        return new QuarterLeaveCalculation(
+                permissible,
+                leaveDates.size(),
+                paidCount,
+                unpaidLeave,
+                sandwich,
+                unpaidLeave + sandwich,
+                lapsed,
+                paidDates,
+                unpaidDates,
+                sandwichDates);
+    }
+
     private int permissibleLeave(
             LocalDate quarterStart, LocalDate quarterEnd, LocalDate effectiveStart, LocalDate joiningDate) {
+        return permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, MAX_PERMISSIBLE_LEAVE);
+    }
+
+    private int permissibleLeave(
+            LocalDate quarterStart, LocalDate quarterEnd, LocalDate effectiveStart, LocalDate joiningDate, int maxLeaves) {
         if (joiningDate == null || !joiningDate.isAfter(quarterStart)) {
-            return MAX_PERMISSIBLE_LEAVE;
+            return maxLeaves;
         }
         long totalDays = ChronoUnit.DAYS.between(quarterStart, quarterEnd) + 1;
         long availableDays = ChronoUnit.DAYS.between(effectiveStart, quarterEnd) + 1;
-        int prorated = Math.round((float) MAX_PERMISSIBLE_LEAVE * availableDays / totalDays);
-        return Math.max(0, Math.min(MAX_PERMISSIBLE_LEAVE, prorated));
+        int prorated = Math.round((float) maxLeaves * availableDays / totalDays);
+        return Math.max(0, Math.min(maxLeaves, prorated));
     }
 
     /**
