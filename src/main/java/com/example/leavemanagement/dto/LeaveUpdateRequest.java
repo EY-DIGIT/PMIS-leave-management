@@ -6,8 +6,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.LocalDate;
 
-/** Request body for applying for leave. */
-public record LeaveApplyRequest(
+/** Request body for updating an existing leave request. */
+public record LeaveUpdateRequest(
         @NotBlank(message = "employeeName is required") String employeeName,
         @Email(message = "email must be a valid email address") String email,
         @NotNull(message = "startDate is required") @JsonFormat(pattern = "yyyy-MM-dd") LocalDate startDate,

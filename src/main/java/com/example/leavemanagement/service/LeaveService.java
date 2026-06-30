@@ -4,6 +4,7 @@ import com.example.leavemanagement.dto.HolidayItem;
 import com.example.leavemanagement.dto.LeaveApplyRequest;
 import com.example.leavemanagement.dto.LeaveDayBreakdown;
 import com.example.leavemanagement.dto.LeaveResponse;
+import com.example.leavemanagement.dto.LeaveUpdateRequest;
 import com.example.leavemanagement.entity.LeaveRequest;
 import com.example.leavemanagement.entity.LeaveStatus;
 import com.example.leavemanagement.entity.PublicHoliday;
@@ -40,6 +41,7 @@ public class LeaveService {
         LeaveDayBreakdown breakdown = computeBreakdown(request.startDate(), request.endDate());
         LeaveRequest saved = leaveRepository.save(new LeaveRequest(
                 request.employeeName(),
+                request.email(),
                 request.startDate(),
                 request.endDate(),
                 request.reason(),
@@ -62,6 +64,23 @@ public class LeaveService {
         return requests.stream()
                 .map(req -> LeaveResponse.from(req, computeBreakdown(req.getStartDate(), req.getEndDate())))
                 .toList();
+    }
+
+    /** Updates employee details, dates and reason of an existing leave request. */
+    @Transactional
+    public LeaveResponse updateLeave(Long id, LeaveUpdateRequest request) {
+        if (request.endDate().isBefore(request.startDate())) {
+            throw new BadRequestException("endDate must not be before startDate");
+        }
+        LeaveRequest req = findOrThrow(id);
+        req.setEmployeeName(request.employeeName());
+        req.setEmail(request.email());
+        req.setStartDate(request.startDate());
+        req.setEndDate(request.endDate());
+        req.setReason(request.reason());
+        LeaveDayBreakdown breakdown = computeBreakdown(request.startDate(), request.endDate());
+        req.setWorkingDays(breakdown.workingDays());
+        return LeaveResponse.from(req, breakdown);
     }
 
     /** Moves a request to APPROVED / REJECTED / CANCELLED. */

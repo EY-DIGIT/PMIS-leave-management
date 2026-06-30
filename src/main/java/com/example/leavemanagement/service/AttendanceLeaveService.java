@@ -88,7 +88,7 @@ public class AttendanceLeaveService {
                 LocalDate start = LocalDate.of(year, month, range[0]);
                 LocalDate end = LocalDate.of(year, month, range[1]);
                 String reason = "Marked absent from attendance import (%04d-%02d)".formatted(year, month);
-                created.add(leaveService.applyForLeave(new LeaveApplyRequest(employeeName, start, end, reason)));
+                created.add(leaveService.applyForLeave(new LeaveApplyRequest(employeeName, null, start, end, reason)));
             }
         }
         return created;

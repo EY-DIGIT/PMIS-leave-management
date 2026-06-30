@@ -147,6 +147,7 @@ class AttendanceLeaveServiceTest {
         return new LeaveResponse(
                 1L,
                 "Asha Kumar",
+                null,
                 LocalDate.of(2026, 6, 5),
                 LocalDate.of(2026, 6, 8),
                 "reason",

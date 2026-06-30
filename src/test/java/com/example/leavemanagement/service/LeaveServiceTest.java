@@ -42,7 +42,7 @@ class LeaveServiceTest {
                 .thenReturn(List.of(new PublicHoliday(LocalDate.of(2026, 1, 26), "Republic Day")));
         when(leaveRepository.save(any(LeaveRequest.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        LeaveResponse res = service.applyForLeave(new LeaveApplyRequest("Asha", start, end, "Vacation"));
+        LeaveResponse res = service.applyForLeave(new LeaveApplyRequest("Asha", null, start, end, "Vacation"));
 
         assertThat(res.totalCalendarDays()).isEqualTo(7);
         assertThat(res.weekendDays()).isEqualTo(2);
@@ -63,7 +63,7 @@ class LeaveServiceTest {
                         new PublicHoliday(LocalDate.of(2026, 1, 26), "Republic Day")));
         when(leaveRepository.save(any(LeaveRequest.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        LeaveResponse res = service.applyForLeave(new LeaveApplyRequest("Asha", start, end, null));
+        LeaveResponse res = service.applyForLeave(new LeaveApplyRequest("Asha", null, start, end, null));
 
         assertThat(res.weekendDays()).isEqualTo(2);
         assertThat(res.holidayDays()).isEqualTo(1);
@@ -79,7 +79,7 @@ class LeaveServiceTest {
                 .thenReturn(List.of());
         when(leaveRepository.save(any(LeaveRequest.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        LeaveResponse res = service.applyForLeave(new LeaveApplyRequest("Bo", day, day, null));
+        LeaveResponse res = service.applyForLeave(new LeaveApplyRequest("Bo", null, day, day, null));
 
         assertThat(res.totalCalendarDays()).isEqualTo(1);
         assertThat(res.workingDays()).isEqualTo(1);
@@ -88,7 +88,7 @@ class LeaveServiceTest {
     @Test
     void rejectsEndBeforeStart() {
         LeaveApplyRequest bad =
-                new LeaveApplyRequest("Bo", LocalDate.of(2026, 1, 28), LocalDate.of(2026, 1, 22), null);
+                new LeaveApplyRequest("Bo", null, LocalDate.of(2026, 1, 28), LocalDate.of(2026, 1, 22), null);
 
         assertThatThrownBy(() -> service.applyForLeave(bad))
                 .isInstanceOf(BadRequestException.class)

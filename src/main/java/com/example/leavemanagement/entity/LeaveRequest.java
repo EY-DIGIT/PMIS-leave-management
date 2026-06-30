@@ -27,6 +27,9 @@ public class LeaveRequest {
     @Column(name = "employee_name", nullable = false, length = 200)
     private String employeeName;
 
+    @Column(name = "email", length = 200)
+    private String email;
+
     @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
 
@@ -52,8 +55,9 @@ public class LeaveRequest {
         // for JPA
     }
 
-    public LeaveRequest(String employeeName, LocalDate startDate, LocalDate endDate, String reason, int workingDays) {
+    public LeaveRequest(String employeeName, String email, LocalDate startDate, LocalDate endDate, String reason, int workingDays) {
         this.employeeName = employeeName;
+        this.email = email;
         this.startDate = startDate;
         this.endDate = endDate;
         this.reason = reason;
@@ -69,6 +73,18 @@ public class LeaveRequest {
         return employeeName;
     }
 
+    public void setEmployeeName(String employeeName) {
+        this.employeeName = employeeName;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
     public LocalDate getStartDate() {
         return startDate;
     }
@@ -79,6 +95,22 @@ public class LeaveRequest {
 
     public String getReason() {
         return reason;
+    }
+
+    public void setStartDate(LocalDate startDate) {
+        this.startDate = startDate;
+    }
+
+    public void setEndDate(LocalDate endDate) {
+        this.endDate = endDate;
+    }
+
+    public void setReason(String reason) {
+        this.reason = reason;
+    }
+
+    public void setWorkingDays(int workingDays) {
+        this.workingDays = workingDays;
     }
 
     public LeaveStatus getStatus() {

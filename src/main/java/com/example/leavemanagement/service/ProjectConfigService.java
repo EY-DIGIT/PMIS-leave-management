@@ -77,11 +77,13 @@ public class ProjectConfigService {
         mapping.setAttendanceId(req.attendanceId());
         mapping.setProjectId(projectId);
         mapping.setEmployeeName(req.employeeName());
+        mapping.setEmail(req.email());
         mapping.setJoiningDate(req.joiningDate());
         resourceProjectMappingRepository.save(mapping);
         return new ResourceProjectResponse(
                 mapping.getAttendanceId(),
                 mapping.getEmployeeName(),
+                mapping.getEmail(),
                 mapping.getProjectId(),
                 mapping.getJoiningDate());
     }
@@ -90,7 +92,7 @@ public class ProjectConfigService {
     public List<ResourceProjectResponse> listResources(String projectId) {
         return resourceProjectMappingRepository.findByProjectId(projectId).stream()
                 .map(m -> new ResourceProjectResponse(
-                        m.getAttendanceId(), m.getEmployeeName(), m.getProjectId(), m.getJoiningDate()))
+                        m.getAttendanceId(), m.getEmployeeName(), m.getEmail(), m.getProjectId(), m.getJoiningDate()))
                 .toList();
     }
 

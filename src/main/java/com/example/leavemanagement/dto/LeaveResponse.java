@@ -13,6 +13,7 @@ import java.util.List;
 public record LeaveResponse(
         Long id,
         String employeeName,
+        String email,
         LocalDate startDate,
         LocalDate endDate,
         String reason,
@@ -24,14 +25,11 @@ public record LeaveResponse(
         List<HolidayItem> holidaysInRange,
         Instant appliedOn) {
 
-    /**
-     * Builds a response from a persisted request plus the day-breakdown that was
-     * computed when it was applied for.
-     */
     public static LeaveResponse from(LeaveRequest req, LeaveDayBreakdown breakdown) {
         return new LeaveResponse(
                 req.getId(),
                 req.getEmployeeName(),
+                req.getEmail(),
                 req.getStartDate(),
                 req.getEndDate(),
                 req.getReason(),

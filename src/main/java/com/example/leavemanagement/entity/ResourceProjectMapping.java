@@ -20,16 +20,20 @@ public class ResourceProjectMapping {
     @Column(name = "employee_name", length = 200)
     private String employeeName;
 
+    @Column(name = "email", length = 200)
+    private String email;
+
     @Column(name = "joining_date")
     private LocalDate joiningDate;
 
     public ResourceProjectMapping() {}
 
     public ResourceProjectMapping(
-            String attendanceId, String projectId, String employeeName, LocalDate joiningDate) {
+            String attendanceId, String projectId, String employeeName, String email, LocalDate joiningDate) {
         this.attendanceId = attendanceId;
         this.projectId = projectId;
         this.employeeName = employeeName;
+        this.email = email;
         this.joiningDate = joiningDate;
     }
 
@@ -55,6 +59,14 @@ public class ResourceProjectMapping {
 
     public void setEmployeeName(String employeeName) {
         this.employeeName = employeeName;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
     }
 
     public LocalDate getJoiningDate() {
