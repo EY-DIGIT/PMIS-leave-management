@@ -104,7 +104,12 @@ public class AttendanceQueryService {
         int stored = 0;
         for (EmployeeAttendance employee : employees) {
             ResourceMonthlyAttendance row = new ResourceMonthlyAttendance(
-                    employee.attendanceId(), employee.employeeName(), employee.designation(), year, month);
+                    employee.attendanceId(),
+                    employee.employeeName(),
+                    employee.designation(),
+                    employee.milestoneId(),
+                    year,
+                    month);
             row.setAbsentDays(absentWeekdays(year, month, employee.absentDays()));
             row.setWorkedMinutesByDay(new LinkedHashMap<>(employee.workedMinutesByDay()));
             attendanceRepository.save(row);
@@ -153,6 +158,7 @@ public class AttendanceQueryService {
                         row.getAttendanceId(),
                         row.getEmployeeName(),
                         row.getDesignation(),
+                        row.getMilestoneId(),
                         row.getAbsentDays(),
                         row.getWorkedMinutesByDay()))
                 .toList();

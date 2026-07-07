@@ -6,9 +6,13 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import lombok.Getter;
+import lombok.Setter;
 
 @Entity
 @Table(name = "project_config")
+@Getter
+@Setter
 public class ProjectConfig {
 
     @Id
@@ -45,54 +49,6 @@ public class ProjectConfig {
         this.fullDayMinutes = fullDayMinutes;
         this.halfDayMinutes = halfDayMinutes;
         this.leaveFrequency = leaveFrequency;
-        this.maxLeavesPerPeriod = maxLeavesPerPeriod;
-    }
-
-    public String getProjectId() {
-        return projectId;
-    }
-
-    public void setProjectId(String projectId) {
-        this.projectId = projectId;
-    }
-
-    public String getProjectName() {
-        return projectName;
-    }
-
-    public void setProjectName(String projectName) {
-        this.projectName = projectName;
-    }
-
-    public int getFullDayMinutes() {
-        return fullDayMinutes;
-    }
-
-    public void setFullDayMinutes(int fullDayMinutes) {
-        this.fullDayMinutes = fullDayMinutes;
-    }
-
-    public int getHalfDayMinutes() {
-        return halfDayMinutes;
-    }
-
-    public void setHalfDayMinutes(int halfDayMinutes) {
-        this.halfDayMinutes = halfDayMinutes;
-    }
-
-    public LeaveFrequency getLeaveFrequency() {
-        return leaveFrequency;
-    }
-
-    public void setLeaveFrequency(LeaveFrequency leaveFrequency) {
-        this.leaveFrequency = leaveFrequency;
-    }
-
-    public int getMaxLeavesPerPeriod() {
-        return maxLeavesPerPeriod;
-    }
-
-    public void setMaxLeavesPerPeriod(int maxLeavesPerPeriod) {
         this.maxLeavesPerPeriod = maxLeavesPerPeriod;
     }
 }

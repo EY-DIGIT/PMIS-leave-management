@@ -8,6 +8,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.time.LocalDate;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * A single public holiday that is marked onto the calendar for a given year.
@@ -20,13 +23,17 @@ import java.time.LocalDate;
         name = "public_holiday",
         uniqueConstraints =
                 @UniqueConstraint(name = "uk_public_holiday_date_name", columnNames = {"holiday_date", "name"}))
+@Getter
+@Setter
 public class PublicHoliday {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Setter(AccessLevel.NONE)
     private Long id;
 
     @Column(name = "holiday_date", nullable = false)
+    @Setter(AccessLevel.NONE)
     private LocalDate holidayDate;
 
     @Column(name = "name", nullable = false, length = 200)
@@ -34,6 +41,7 @@ public class PublicHoliday {
 
     /** The calendar year the holiday belongs to (derived from holidayDate). */
     @Column(name = "holiday_year", nullable = false)
+    @Setter(AccessLevel.NONE)
     private int year;
 
     protected PublicHoliday() {
@@ -46,28 +54,8 @@ public class PublicHoliday {
         this.year = holidayDate.getYear();
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public LocalDate getHolidayDate() {
-        return holidayDate;
-    }
-
     public void setHolidayDate(LocalDate holidayDate) {
         this.holidayDate = holidayDate;
         this.year = holidayDate.getYear();
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public int getYear() {
-        return year;
     }
 }

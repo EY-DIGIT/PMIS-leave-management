@@ -10,6 +10,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.time.LocalDate;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
 /**
@@ -18,10 +21,13 @@ import org.hibernate.annotations.CreationTimestamp;
  */
 @Entity
 @Table(name = "leave_request")
+@Getter
+@Setter
 public class LeaveRequest {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Setter(AccessLevel.NONE)
     private Long id;
 
     @Column(name = "employee_name", nullable = false, length = 200)
@@ -49,6 +55,7 @@ public class LeaveRequest {
 
     @CreationTimestamp
     @Column(name = "applied_on", nullable = false, updatable = false)
+    @Setter(AccessLevel.NONE)
     private Instant appliedOn;
 
     protected LeaveRequest() {
@@ -63,69 +70,5 @@ public class LeaveRequest {
         this.reason = reason;
         this.workingDays = workingDays;
         this.status = LeaveStatus.PENDING;
-    }
-
-    public Long getId() {
-        return id;
-    }
-
-    public String getEmployeeName() {
-        return employeeName;
-    }
-
-    public void setEmployeeName(String employeeName) {
-        this.employeeName = employeeName;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public LocalDate getStartDate() {
-        return startDate;
-    }
-
-    public LocalDate getEndDate() {
-        return endDate;
-    }
-
-    public String getReason() {
-        return reason;
-    }
-
-    public void setStartDate(LocalDate startDate) {
-        this.startDate = startDate;
-    }
-
-    public void setEndDate(LocalDate endDate) {
-        this.endDate = endDate;
-    }
-
-    public void setReason(String reason) {
-        this.reason = reason;
-    }
-
-    public void setWorkingDays(int workingDays) {
-        this.workingDays = workingDays;
-    }
-
-    public LeaveStatus getStatus() {
-        return status;
-    }
-
-    public void setStatus(LeaveStatus status) {
-        this.status = status;
-    }
-
-    public int getWorkingDays() {
-        return workingDays;
-    }
-
-    public Instant getAppliedOn() {
-        return appliedOn;
     }
 }

@@ -30,9 +30,9 @@ import org.springframework.web.multipart.MultipartFile;
  * assuming a fixed header position or row stride. For each In-Time row:
  *
  * <ul>
- *   <li>Column A — Attendance ID, B — Employee Name, C — Designation.
- *   <li>Column D — the row label (In-Time / Out-Time / Total-Time).
- *   <li>Columns E.. — day-of-month 1..31 (day {@code d} is column index {@code 3 + d}).
+ *   <li>Column A — Attendance ID, B — Employee Name, C — Designation, D — Milestone ID.
+ *   <li>Column E — the row label (In-Time / Out-Time / Total-Time).
+ *   <li>Columns F.. — day-of-month 1..31 (day {@code d} is column index {@code 4 + d}).
  * </ul>
  *
  * A day where both the In-Time and Out-Time cells are 0/blank is recorded as an
@@ -44,7 +44,8 @@ public class AttendanceExcelParser {
     private static final int COL_ATTENDANCE_ID = 0;
     private static final int COL_EMPLOYEE_NAME = 1;
     private static final int COL_DESIGNATION = 2;
-    private static final int LABEL_COL = 3; // column D — first day column is LABEL_COL + 1
+    private static final int COL_MILESTONE_ID = 3;
+    private static final int LABEL_COL = 4; // column E — first day column is LABEL_COL + 1
     private static final int MAX_DAY = 31;
     private static final String IN_TIME = "intime";
     private static final String OUT_TIME = "outtime";
@@ -99,6 +100,7 @@ public class AttendanceExcelParser {
                         text(inRow.getCell(COL_ATTENDANCE_ID)),
                         text(inRow.getCell(COL_EMPLOYEE_NAME)),
                         text(inRow.getCell(COL_DESIGNATION)),
+                        text(inRow.getCell(COL_MILESTONE_ID)),
                         absentDays,
                         workedMinutesByDay));
             }
@@ -133,7 +135,12 @@ public class AttendanceExcelParser {
         for (int i = 0; i < employees.size(); i++) {
             EmployeeAttendance e = employees.get(i);
             keyed.add(new EmployeeAttendance(
-                    "R" + (i + 1), e.employeeName(), e.designation(), e.absentDays(), e.workedMinutesByDay()));
+                    "R" + (i + 1),
+                    e.employeeName(),
+                    e.designation(),
+                    e.milestoneId(),
+                    e.absentDays(),
+                    e.workedMinutesByDay()));
         }
         return keyed;
     }

@@ -157,7 +157,7 @@ class AttendanceQueryServiceTest {
     @Test
     void storeAndSummarizePersistsAndReturnsSummary() {
         when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of(6, 500))));
+                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", "M1", Set.of(6, 7), Map.of(6, 500))));
         when(attendanceRepository.findByYearAndMonth(2026, 5)).thenReturn(List.of()); // no existing rows
         MonthlyAttendanceSummary sentinel =
                 new MonthlyAttendanceSummary(2026, 5, 31, 5, 4, 9, List.of(), 0, List.of(), 1, List.of());
@@ -174,7 +174,8 @@ class AttendanceQueryServiceTest {
     void storeMonthlyKeepsOnlyWeekdayAbsencesAndPersistsWorkedMinutes() {
         // June 2024: 1 Sat, 2 Sun (dropped), 6 Thu, 7 Fri (kept).
         when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(1, 2, 6, 7), Map.of(6, 500))));
+                .thenReturn(
+                        List.of(new EmployeeAttendance("E1", "Asha", "Dev", "M1", Set.of(1, 2, 6, 7), Map.of(6, 500))));
         when(attendanceRepository.findByYearAndMonth(2024, 6)).thenReturn(List.of()); // no existing rows
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});

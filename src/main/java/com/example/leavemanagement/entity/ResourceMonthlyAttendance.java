@@ -14,6 +14,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
  * One resource's parsed attendance for a single month, persisted so a whole
@@ -30,13 +33,17 @@ import java.util.Set;
  */
 @Entity
 @Table(name = "resource_monthly_attendance")
+@Getter
+@Setter
 public class ResourceMonthlyAttendance {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Setter(AccessLevel.NONE)
     private Long id;
 
     @Column(name = "attendance_id", nullable = false)
+    @Setter(AccessLevel.NONE)
     private String attendanceId;
 
     @Column(name = "employee_name")
@@ -45,10 +52,15 @@ public class ResourceMonthlyAttendance {
     @Column(name = "designation")
     private String designation;
 
+    @Column(name = "milestone_id")
+    private String milestoneId;
+
     @Column(name = "att_year", nullable = false)
+    @Setter(AccessLevel.NONE)
     private int year;
 
     @Column(name = "att_month", nullable = false)
+    @Setter(AccessLevel.NONE)
     private int month;
 
     @ElementCollection
@@ -73,58 +85,21 @@ public class ResourceMonthlyAttendance {
 
     public ResourceMonthlyAttendance(
             String attendanceId, String employeeName, String designation, int year, int month) {
+        this(attendanceId, employeeName, designation, null, year, month);
+    }
+
+    public ResourceMonthlyAttendance(
+            String attendanceId,
+            String employeeName,
+            String designation,
+            String milestoneId,
+            int year,
+            int month) {
         this.attendanceId = attendanceId;
         this.employeeName = employeeName;
         this.designation = designation;
+        this.milestoneId = milestoneId;
         this.year = year;
         this.month = month;
-    }
-
-    public Long getId() {
-        return id;
-    }
-
-    public String getAttendanceId() {
-        return attendanceId;
-    }
-
-    public String getEmployeeName() {
-        return employeeName;
-    }
-
-    public void setEmployeeName(String employeeName) {
-        this.employeeName = employeeName;
-    }
-
-    public String getDesignation() {
-        return designation;
-    }
-
-    public void setDesignation(String designation) {
-        this.designation = designation;
-    }
-
-    public int getYear() {
-        return year;
-    }
-
-    public int getMonth() {
-        return month;
-    }
-
-    public Set<Integer> getAbsentDays() {
-        return absentDays;
-    }
-
-    public void setAbsentDays(Set<Integer> absentDays) {
-        this.absentDays = absentDays;
-    }
-
-    public Map<Integer, Integer> getWorkedMinutesByDay() {
-        return workedMinutesByDay;
-    }
-
-    public void setWorkedMinutesByDay(Map<Integer, Integer> workedMinutesByDay) {
-        this.workedMinutesByDay = workedMinutesByDay;
     }
 }

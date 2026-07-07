@@ -65,7 +65,7 @@ class AttendanceLeaveServiceTest {
         //         Thu 11, Fri 12 (a public holiday), weekend 13-14 -> one leave 11..11.
         //         (20,21 are an absent weekend with no working day -> no leave.)
         when(parser.parse(any())).thenReturn(List.of(new EmployeeAttendance(
-                "E1", "Asha", "Dev", Set.of(5, 6, 7, 8, 11, 12, 13, 14, 20, 21), Map.of())));
+                "E1", "Asha", "Dev", "M1", Set.of(5, 6, 7, 8, 11, 12, 13, 14, 20, 21), Map.of())));
         when(directory.findByAttendanceId("E1"))
                 .thenReturn(Optional.of(new EmployeeInfo("E1", "Asha Kumar", "Dev", null)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
@@ -89,7 +89,7 @@ class AttendanceLeaveServiceTest {
     @Test
     void noLeavesWhenAllAbsencesFallOnWeekends() {
         when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Bo", "QA", Set.of(6, 7, 13, 14), Map.of())));
+                .thenReturn(List.of(new EmployeeAttendance("E1", "Bo", "QA", "M1", Set.of(6, 7, 13, 14), Map.of())));
         when(directory.findByAttendanceId("E1"))
                 .thenReturn(Optional.of(new EmployeeInfo("E1", "Bo Lee", "QA", null)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
@@ -108,7 +108,7 @@ class AttendanceLeaveServiceTest {
         // day2=7.5h and day4=5h are short (>4,<8); day5=3h is a half day (<=4h);
         // day1=8h and day3=9h are full days.
         EmployeeAttendance e = new EmployeeAttendance(
-                "E1", "Asha", "Dev", Set.of(8), Map.of(1, 480, 2, 450, 3, 540, 4, 300, 5, 180));
+                "E1", "Asha", "Dev", "M1", Set.of(8), Map.of(1, 480, 2, 450, 3, 540, 4, 300, 5, 180));
         when(parser.parse(any())).thenReturn(List.of(e));
         when(directory.findByAttendanceId("E1"))
                 .thenReturn(Optional.of(new EmployeeInfo("E1", "Asha Kumar", "Dev", null)));
