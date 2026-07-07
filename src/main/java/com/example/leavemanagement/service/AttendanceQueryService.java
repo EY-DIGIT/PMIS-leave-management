@@ -75,9 +75,9 @@ public class AttendanceQueryService {
      * short-hours calculation. Re-uploading a month overwrites it.
      */
     @Transactional
-    public MonthlyAttendanceStored storeMonthly(int year, int month, MultipartFile file) {
+    public MonthlyAttendanceStored storeMonthly(int year, int month, String milestoneId, MultipartFile file) {
         validateMonthAndYear(year, month);
-        int stored = persist(year, month, parser.parse(file));
+        int stored = persist(year, month, milestoneId, parser.parse(file));
         return new MonthlyAttendanceStored(year, month, stored);
     }
 
@@ -87,15 +87,15 @@ public class AttendanceQueryService {
      * and the quarterly settlement.
      */
     @Transactional
-    public MonthlyAttendanceSummary storeAndSummarize(int year, int month, MultipartFile file) {
+    public MonthlyAttendanceSummary storeAndSummarize(int year, int month, String milestoneId, MultipartFile file) {
         validateMonthAndYear(year, month);
         List<EmployeeAttendance> parsed = parser.parse(file);
-        persist(year, month, parsed);
+        persist(year, month, milestoneId, parsed);
         return attendanceLeaveService.buildSummary(year, month, parsed);
     }
 
     /** Replaces the month's stored rows with the freshly parsed set (handles repeated/masked ids). */
-    private int persist(int year, int month, List<EmployeeAttendance> employees) {
+    private int persist(int year, int month, String milestoneId, List<EmployeeAttendance> employees) {
         List<ResourceMonthlyAttendance> existing = attendanceRepository.findByYearAndMonth(year, month);
         if (!existing.isEmpty()) {
             attendanceRepository.deleteAll(existing);
@@ -107,7 +107,7 @@ public class AttendanceQueryService {
                     employee.attendanceId(),
                     employee.employeeName(),
                     employee.designation(),
-                    employee.milestoneId(),
+                    milestoneId,
                     year,
                     month);
             row.setAbsentDays(absentWeekdays(year, month, employee.absentDays()));
@@ -158,7 +158,6 @@ public class AttendanceQueryService {
                         row.getAttendanceId(),
                         row.getEmployeeName(),
                         row.getDesignation(),
-                        row.getMilestoneId(),
                         row.getAbsentDays(),
                         row.getWorkedMinutesByDay()))
                 .toList();

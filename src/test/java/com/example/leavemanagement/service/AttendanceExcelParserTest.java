@@ -13,8 +13,7 @@ import org.springframework.mock.web.MockMultipartFile;
 
 class AttendanceExcelParserTest {
 
-    private static final int MILESTONE_COL = 3;
-    private static final int LABEL_COL = 4; // day d lives in column LABEL_COL + d
+    private static final int LABEL_COL = 3; // day d lives in column LABEL_COL + d
 
     private final AttendanceExcelParser parser = new AttendanceExcelParser();
 
@@ -28,7 +27,6 @@ class AttendanceExcelParserTest {
             header.createCell(0).setCellValue("Attendance ID");
             header.createCell(1).setCellValue("Employee Name");
             header.createCell(2).setCellValue("Designation");
-            header.createCell(MILESTONE_COL).setCellValue("Milestone ID");
             header.createCell(LABEL_COL).setCellValue("Date");
 
             Row in = sheet.createRow(2);
@@ -38,7 +36,6 @@ class AttendanceExcelParserTest {
             in.createCell(0).setCellValue("E1");
             in.createCell(1).setCellValue("Asha");
             in.createCell(2).setCellValue("Dev");
-            in.createCell(MILESTONE_COL).setCellValue("M1");
             in.createCell(LABEL_COL).setCellValue("In-Time");
             out.createCell(LABEL_COL).setCellValue("Out-Time");
             total.createCell(LABEL_COL).setCellValue("Total-Time");
@@ -58,7 +55,6 @@ class AttendanceExcelParserTest {
             assertThat(result).hasSize(1); // title + header rows are not mistaken for employees
             EmployeeAttendance e = result.get(0);
             assertThat(e.attendanceId()).isEqualTo("E1");
-            assertThat(e.milestoneId()).isEqualTo("M1");
             assertThat(e.workedMinutesByDay()).containsEntry(1, 510).containsEntry(2, 420);
             assertThat(e.absentDays()).contains(3);
             assertThat(e.absentDays()).doesNotContain(1, 2);
@@ -93,7 +89,6 @@ class AttendanceExcelParserTest {
         in.createCell(0).setCellValue(id);
         in.createCell(2).setCellValue(designation);
         in.createCell(LABEL_COL).setCellValue("In-Time");
-        // no milestone id set here — the masked-id test doesn't exercise it
         out.createCell(LABEL_COL).setCellValue("Out-Time");
         sheet.getRow(startRow + 2).createCell(LABEL_COL).setCellValue("Total-Time");
     }

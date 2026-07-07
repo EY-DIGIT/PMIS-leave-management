@@ -45,8 +45,10 @@ public class AttendanceController {
     public MonthlyAttendanceSummary summary(
             @Parameter(description = "Month the sheet covers (1-12)", example = "6") @RequestParam("month") int month,
             @Parameter(description = "Year the sheet covers", example = "2026") @RequestParam("year") int year,
+            @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
+                    String milestoneId,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
-        return attendanceQueryService.storeAndSummarize(year, month, file);
+        return attendanceQueryService.storeAndSummarize(year, month, milestoneId, file);
     }
 
     /**
@@ -62,9 +64,11 @@ public class AttendanceController {
     public ResponseEntity<MonthlyAttendanceStored> storeMonthly(
             @Parameter(description = "Month the sheet covers (1-12)", example = "6") @RequestParam("month") int month,
             @Parameter(description = "Year the sheet covers", example = "2026") @RequestParam("year") int year,
+            @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
+                    String milestoneId,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(attendanceQueryService.storeMonthly(year, month, file));
+                .body(attendanceQueryService.storeMonthly(year, month, milestoneId, file));
     }
 
     /**

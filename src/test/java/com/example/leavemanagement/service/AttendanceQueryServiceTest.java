@@ -157,14 +157,14 @@ class AttendanceQueryServiceTest {
     @Test
     void storeAndSummarizePersistsAndReturnsSummary() {
         when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", "M1", Set.of(6, 7), Map.of(6, 500))));
+                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of(6, 500))));
         when(attendanceRepository.findByYearAndMonth(2026, 5)).thenReturn(List.of()); // no existing rows
         MonthlyAttendanceSummary sentinel =
                 new MonthlyAttendanceSummary(2026, 5, 31, 5, 4, 9, List.of(), 0, List.of(), 1, List.of());
         when(attendanceLeaveService.buildSummary(eq(2026), eq(5), any())).thenReturn(sentinel);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        MonthlyAttendanceSummary result = service.storeAndSummarize(2026, 5, file);
+        MonthlyAttendanceSummary result = service.storeAndSummarize(2026, 5, "M1", file);
 
         assertThat(result).isSameAs(sentinel); // summary returned
         org.mockito.Mockito.verify(attendanceRepository).save(any(ResourceMonthlyAttendance.class)); // and persisted
@@ -174,12 +174,11 @@ class AttendanceQueryServiceTest {
     void storeMonthlyKeepsOnlyWeekdayAbsencesAndPersistsWorkedMinutes() {
         // June 2024: 1 Sat, 2 Sun (dropped), 6 Thu, 7 Fri (kept).
         when(parser.parse(any()))
-                .thenReturn(
-                        List.of(new EmployeeAttendance("E1", "Asha", "Dev", "M1", Set.of(1, 2, 6, 7), Map.of(6, 500))));
+                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(1, 2, 6, 7), Map.of(6, 500))));
         when(attendanceRepository.findByYearAndMonth(2024, 6)).thenReturn(List.of()); // no existing rows
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        MonthlyAttendanceStored stored = service.storeMonthly(2024, 6, file);
+        MonthlyAttendanceStored stored = service.storeMonthly(2024, 6, "M1", file);
 
         assertThat(stored.resourcesStored()).isEqualTo(1);
         ArgumentCaptor<ResourceMonthlyAttendance> captor = ArgumentCaptor.forClass(ResourceMonthlyAttendance.class);
