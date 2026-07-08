@@ -1,5 +1,6 @@
 package com.example.leavemanagement.dto;
 
+/*
 import com.example.leavemanagement.entity.LeaveFrequency;
 
 public record ProjectConfigResponse(
@@ -10,3 +11,4 @@ public record ProjectConfigResponse(
         LeaveFrequency leaveFrequency,
         int maxLeavesPerPeriod,
         int resourceCount) {}
+*/
