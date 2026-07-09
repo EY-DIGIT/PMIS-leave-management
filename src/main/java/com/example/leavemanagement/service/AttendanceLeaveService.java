@@ -5,8 +5,6 @@ import com.example.leavemanagement.client.EmployeeInfo;
 import com.example.leavemanagement.dto.EmployeeAttendance;
 import com.example.leavemanagement.dto.EmployeeAttendanceSummary;
 import com.example.leavemanagement.dto.HolidayItem;
-import com.example.leavemanagement.dto.LeaveApplyRequest;
-import com.example.leavemanagement.dto.LeaveResponse;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.dto.WeekendDates;
 import com.example.leavemanagement.entity.PublicHoliday;
@@ -29,14 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Turns an uploaded monthly attendance sheet into leave records.
- *
- * <p>For each employee, a day where both In-Time and Out-Time are 0 is an
- * absence. Absences on weekends or stored public holidays are skipped (the
- * person wasn't expected in). Remaining absent working days are grouped into
- * consecutive ranges — a run is bridged across intervening weekend/holiday days
- * but ends at the last absent working day — and each range is saved as a single
- * PENDING leave. The employee name is resolved from the external directory by
+ * Builds a monthly attendance summary: Saturdays/Sundays/public holidays, plus, per employee,
+ * how many working days were marked absent (In-Time and Out-Time both 0) and how many worked
+ * days ran short of a full day. The employee name is resolved from the external directory by
  * attendance id.
  */
 @Service
@@ -49,7 +42,6 @@ public class AttendanceLeaveService {
     private final AttendanceExcelParser parser;
     private final EmployeeDirectoryClient directory;
     private final PublicHolidayRepository holidayRepository;
-    private final LeaveService leaveService;
     private final ResourceProjectMappingRepository resourceProjectMappingRepository;
     private final ProjectConfigRepository projectConfigRepository;
 
@@ -57,41 +49,13 @@ public class AttendanceLeaveService {
             AttendanceExcelParser parser,
             EmployeeDirectoryClient directory,
             PublicHolidayRepository holidayRepository,
-            LeaveService leaveService,
             ResourceProjectMappingRepository resourceProjectMappingRepository,
             ProjectConfigRepository projectConfigRepository) {
         this.parser = parser;
         this.directory = directory;
         this.holidayRepository = holidayRepository;
-        this.leaveService = leaveService;
         this.resourceProjectMappingRepository = resourceProjectMappingRepository;
         this.projectConfigRepository = projectConfigRepository;
-    }
-
-    @Transactional
-    public List<LeaveResponse> importLeaves(int year, int month, MultipartFile file) {
-        validateMonthAndYear(year, month);
-
-        LocalDate monthStart = LocalDate.of(year, month, 1);
-        int lengthOfMonth = monthStart.lengthOfMonth();
-        Set<LocalDate> holidays =
-                holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(monthStart, monthStart.withDayOfMonth(lengthOfMonth)).stream()
-                        .map(PublicHoliday::getHolidayDate)
-                        .collect(Collectors.toSet());
-
-        List<EmployeeAttendance> employees = parser.parse(file);
-        List<LeaveResponse> created = new ArrayList<>();
-
-        for (EmployeeAttendance employee : employees) {
-            String employeeName = resolveName(employee);
-            for (int[] range : groupConsecutive(employee.absentDays(), year, month, lengthOfMonth, holidays)) {
-                LocalDate start = LocalDate.of(year, month, range[0]);
-                LocalDate end = LocalDate.of(year, month, range[1]);
-                String reason = "Marked absent from attendance import (%04d-%02d)".formatted(year, month);
-                created.add(leaveService.applyForLeave(new LeaveApplyRequest(employeeName, null, start, end, reason)));
-            }
-        }
-        return created;
     }
 
     /**
@@ -225,46 +189,6 @@ public class AttendanceLeaveService {
                 .orElseGet(() -> employee.employeeName().isBlank()
                         ? "Attendance " + employee.attendanceId()
                         : employee.employeeName());
-    }
-
-    /**
-     * Groups absent working days into consecutive {@code [startDay, endDay]} ranges.
-     * A present working day ends the current run; absent weekend/holiday days are
-     * bridged (kept inside the span) but never start or end a run.
-     */
-    private List<int[]> groupConsecutive(
-            Set<Integer> absentDays, int year, int month, int lengthOfMonth, Set<LocalDate> holidays) {
-        List<int[]> ranges = new ArrayList<>();
-        Integer runStart = null;
-        Integer runEnd = null;
-
-        for (int day = 1; day <= lengthOfMonth; day++) {
-            LocalDate date = LocalDate.of(year, month, day);
-            boolean absent = absentDays.contains(day);
-
-            if (!absent) {
-                // Present (worked) — close any open run.
-                if (runStart != null) {
-                    ranges.add(new int[] {runStart, runEnd});
-                    runStart = null;
-                    runEnd = null;
-                }
-                continue;
-            }
-
-            if (isWorkingDay(date, holidays)) {
-                // Absent working day — extend (or start) the run.
-                if (runStart == null) {
-                    runStart = day;
-                }
-                runEnd = day;
-            }
-            // else: absent weekend/holiday — bridge it; leaves the run open without extending its end.
-        }
-        if (runStart != null) {
-            ranges.add(new int[] {runStart, runEnd});
-        }
-        return ranges;
     }
 
     private boolean isWorkingDay(LocalDate date, Set<LocalDate> holidays) {

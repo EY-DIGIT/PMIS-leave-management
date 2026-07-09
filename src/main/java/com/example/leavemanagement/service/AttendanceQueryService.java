@@ -2,18 +2,23 @@ package com.example.leavemanagement.service;
 
 import com.example.leavemanagement.client.EmployeeDirectoryClient;
 import com.example.leavemanagement.client.EmployeeInfo;
+import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.AttendanceSummaryReport;
 import com.example.leavemanagement.dto.EmployeeAttendance;
+import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyAttendanceStored;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.ResourceQuarterSettlement;
+import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.entity.ResourceMonthlyAttendance;
 import com.example.leavemanagement.entity.ResourceProjectMapping;
+import com.example.leavemanagement.exception.AttendanceValidationException;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import com.example.leavemanagement.repository.ResourceMonthlyAttendanceRepository;
@@ -25,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,6 +55,8 @@ public class AttendanceQueryService {
     private final AttendanceLeaveService attendanceLeaveService;
     private final ResourceProjectMappingRepository resourceProjectMappingRepository;
     private final ProjectConfigRepository projectConfigRepository;
+    private final MasterResourceRepository masterResourceRepository;
+    private final LeavePolicyClient leavePolicyClient;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
@@ -58,7 +66,9 @@ public class AttendanceQueryService {
             QuarterLeavePolicy policy,
             AttendanceLeaveService attendanceLeaveService,
             ResourceProjectMappingRepository resourceProjectMappingRepository,
-            ProjectConfigRepository projectConfigRepository) {
+            ProjectConfigRepository projectConfigRepository,
+            MasterResourceRepository masterResourceRepository,
+            LeavePolicyClient leavePolicyClient) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
@@ -67,6 +77,8 @@ public class AttendanceQueryService {
         this.attendanceLeaveService = attendanceLeaveService;
         this.resourceProjectMappingRepository = resourceProjectMappingRepository;
         this.projectConfigRepository = projectConfigRepository;
+        this.masterResourceRepository = masterResourceRepository;
+        this.leavePolicyClient = leavePolicyClient;
     }
 
     /**
@@ -75,10 +87,14 @@ public class AttendanceQueryService {
      * short-hours calculation. Re-uploading a month overwrites it.
      */
     @Transactional
-    public MonthlyAttendanceStored storeMonthly(int year, int month, String milestoneId, MultipartFile file) {
+    public MonthlyAttendanceStored storeMonthly(
+            int year, int month, String milestoneId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
         validateMonthAndYear(year, month);
-        int stored = persist(year, month, milestoneId, parser.parse(file));
-        return new MonthlyAttendanceStored(year, month, stored);
+        validateCompleteMonthRange(startDate, endDate);
+        List<EmployeeAttendance> parsed = parser.parse(file);
+        Map<String, LeavePolicyResponse> leavePolicies = validateResourcesAndFetchLeavePolicies(parsed);
+        int stored = persist(year, month, milestoneId, parsed);
+        return new MonthlyAttendanceStored(year, month, stored, leavePolicies);
     }
 
     /**
@@ -87,11 +103,90 @@ public class AttendanceQueryService {
      * and the quarterly settlement.
      */
     @Transactional
-    public MonthlyAttendanceSummary storeAndSummarize(int year, int month, String milestoneId, MultipartFile file) {
+    public MonthlyAttendanceSummary storeAndSummarize(
+            int year, int month, String milestoneId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
         validateMonthAndYear(year, month);
+        validateCompleteMonthRange(startDate, endDate);
         List<EmployeeAttendance> parsed = parser.parse(file);
+        validateResourcesAndFetchLeavePolicies(parsed);
         persist(year, month, milestoneId, parsed);
         return attendanceLeaveService.buildSummary(year, month, parsed);
+    }
+
+    /**
+     * When startDate/endDate are supplied, verifies they span a <b>complete month</b>: either the
+     * 1st to the last day of a calendar month (e.g. 1 Jun - 30 Jun), or a rolling month from
+     * startDate to the same date one month later (e.g. 4 Jun - 4 Jul). Both dates are optional, but
+     * must be given together. Rejects the whole upload otherwise.
+     */
+    private void validateCompleteMonthRange(LocalDate startDate, LocalDate endDate) {
+        if (startDate == null && endDate == null) {
+            return;
+        }
+        if (startDate == null || endDate == null) {
+            throw new AttendanceValidationException(
+                    List.of("Both startDate and endDate must be provided together."));
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new AttendanceValidationException(List.of("startDate must not be after endDate."));
+        }
+        boolean fullCalendarMonth = startDate.getDayOfMonth() == 1
+                && endDate.equals(startDate.withDayOfMonth(startDate.lengthOfMonth()));
+        boolean rollingMonth = endDate.equals(startDate.plusMonths(1));
+        if (!fullCalendarMonth && !rollingMonth) {
+            throw new AttendanceValidationException(List.of(
+                    ("startDate (%s) to endDate (%s) does not span a complete month — it must be either the 1st "
+                                    + "to the last day of a calendar month, or startDate to the same date one "
+                                    + "month later.")
+                            .formatted(startDate, endDate)));
+        }
+    }
+
+    /**
+     * For every row in the uploaded sheet, checks that its Attendance ID exists as an active
+     * {@link MasterResource} with a project id, then fetches that project's leave policy from the
+     * external leave-policy API. If any row fails validation (or a policy fetch fails), the whole
+     * upload is rejected with every collected error and nothing is persisted.
+     */
+    private Map<String, LeavePolicyResponse> validateResourcesAndFetchLeavePolicies(
+            List<EmployeeAttendance> employees) {
+        List<String> errors = new ArrayList<>();
+        Set<String> projectIds = new LinkedHashSet<>();
+
+        for (EmployeeAttendance employee : employees) {
+            String attendanceId = employee.attendanceId();
+            Optional<MasterResource> resource = masterResourceRepository.findById(attendanceId);
+            if (resource.isEmpty()) {
+                errors.add("Resource " + attendanceId + " does not exist.");
+                continue;
+            }
+            if (!resource.get().isActive()) {
+                errors.add("Resource " + attendanceId + " is inactive.");
+                continue;
+            }
+            String projectId = resource.get().getProjectId();
+            if (projectId == null || projectId.isBlank()) {
+                errors.add("Resource " + attendanceId + " has no project id configured.");
+                continue;
+            }
+            projectIds.add(projectId);
+        }
+
+        Map<String, LeavePolicyResponse> leavePoliciesByProject = new LinkedHashMap<>();
+        if (errors.isEmpty()) {
+            for (String projectId : projectIds) {
+                leavePolicyClient
+                        .getLeavePolicy(projectId)
+                        .ifPresentOrElse(
+                                policy -> leavePoliciesByProject.put(projectId, policy),
+                                () -> errors.add("Could not fetch leave policy for project " + projectId + "."));
+            }
+        }
+
+        if (!errors.isEmpty()) {
+            throw new AttendanceValidationException(errors);
+        }
+        return leavePoliciesByProject;
     }
 
     /** Replaces the month's stored rows with the freshly parsed set (handles repeated/masked ids). */

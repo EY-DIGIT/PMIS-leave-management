@@ -28,9 +28,9 @@ public class MasterResourceService {
         this.repository = repository;
     }
 
-    /** Parses the resource master Excel and upserts every row by res_id. */
+    /** Parses the resource master Excel and upserts every row by res_id, all under the given project. */
     @Transactional
-    public ResourceUploadResult upload(MultipartFile file) {
+    public ResourceUploadResult upload(MultipartFile file, String projectId) {
         List<ResourceRow> rows = parser.parse(file);
         int stored = 0;
         for (ResourceRow row : rows) {
@@ -43,6 +43,7 @@ public class MasterResourceService {
             resource.setLastDate(row.lastDate());
             resource.setDesignationType(row.designationType());
             resource.setActive(row.active());
+            resource.setProjectId(projectId);
             repository.save(resource);
             stored++;
         }
@@ -79,6 +80,7 @@ public class MasterResourceService {
         resource.setLastDate(request.lastDate());
         resource.setDesignationType(request.designationType());
         resource.setActive(request.active());
+        resource.setProjectId(request.projectId());
         return toResponse(resource);
     }
 
@@ -132,6 +134,7 @@ public class MasterResourceService {
                 r.getDateOfJoining(),
                 r.getLastDate(),
                 r.getDesignationType(),
-                r.isActive());
+                r.isActive(),
+                r.getProjectId());
     }
 }

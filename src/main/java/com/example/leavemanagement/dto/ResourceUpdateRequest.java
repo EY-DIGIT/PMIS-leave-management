@@ -14,4 +14,5 @@ public record ResourceUpdateRequest(
         @NotNull(message = "dateOfJoining is required") LocalDate dateOfJoining,
         LocalDate lastDate,
         String designationType,
-        @NotNull(message = "active is required") Boolean active) {}
+        @NotNull(message = "active is required") Boolean active,
+        String projectId) {}

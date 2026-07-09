@@ -1,5 +1,6 @@
 package com.example.leavemanagement.controller;
 
+/*
 import com.example.leavemanagement.dto.LeaveApplyRequest;
 import com.example.leavemanagement.dto.LeaveResponse;
 import com.example.leavemanagement.dto.LeaveUpdateRequest;
@@ -39,10 +40,8 @@ public class LeaveController {
         this.attendanceLeaveService = attendanceLeaveService;
     }
 
-    /**
-     * Apply for leave. The response includes the chargeable working days with
-     * weekends and public holidays excluded. POST /api/leaves
-     */
+    // Apply for leave. The response includes the chargeable working days with
+    // weekends and public holidays excluded. POST /api/leaves
     @Operation(
             summary = "Apply for leave",
             description = "Computes chargeable working days by excluding Saturdays, Sundays and public "
@@ -52,12 +51,10 @@ public class LeaveController {
         return ResponseEntity.status(HttpStatus.CREATED).body(leaveService.applyForLeave(request));
     }
 
-    /**
-     * Import leaves from a monthly attendance sheet. Each day where an employee's
-     * In-Time and Out-Time are both 0 is treated as an absence; absent working
-     * days (excluding weekends and public holidays) are grouped into consecutive
-     * leave ranges. POST /api/leaves/from-attendance (multipart/form-data)
-     */
+    // Import leaves from a monthly attendance sheet. Each day where an employee's
+    // In-Time and Out-Time are both 0 is treated as an absence; absent working
+    // days (excluding weekends and public holidays) are grouped into consecutive
+    // leave ranges. POST /api/leaves/from-attendance (multipart/form-data)
     @Operation(
             summary = "Import leaves from an attendance sheet (Excel)",
             description = "Upload the monthly attendance .xlsx/.xls (3 rows per employee: In-Time/Out-Time/"
@@ -74,7 +71,7 @@ public class LeaveController {
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
-    /** List leave requests, optionally filtered by ?employee=Name. */
+    // List leave requests, optionally filtered by ?employee=Name.
     @Operation(summary = "List leave requests", description = "Optionally filter by employee name.")
     @GetMapping
     public List<LeaveResponse> list(
@@ -83,14 +80,14 @@ public class LeaveController {
         return leaveService.listLeaves(employee);
     }
 
-    /** Get a single leave request. GET /api/leaves/{id} */
+    // Get a single leave request. GET /api/leaves/{id}
     @Operation(summary = "Get a single leave request", description = "Returns 404 if not found.")
     @GetMapping("/{id}")
     public LeaveResponse get(@PathVariable Long id) {
         return leaveService.getLeave(id);
     }
 
-    /** Update leave details (employee name, email, dates, reason). PUT /api/leaves/{id} */
+    // Update leave details (employee name, email, dates, reason). PUT /api/leaves/{id}
     @Operation(
             summary = "Update a leave request",
             description = "Updates employee name, email, start date, end date and reason. "
@@ -102,7 +99,7 @@ public class LeaveController {
         return leaveService.updateLeave(id, request);
     }
 
-    /** Update status. PATCH /api/leaves/{id}/status?value=APPROVED */
+    // Update status. PATCH /api/leaves/{id}/status?value=APPROVED
     @Operation(
             summary = "Update leave status",
             description = "Set the status to PENDING, APPROVED, REJECTED or CANCELLED.")
@@ -113,3 +110,4 @@ public class LeaveController {
         return leaveService.updateStatus(id, value);
     }
 }
+*/

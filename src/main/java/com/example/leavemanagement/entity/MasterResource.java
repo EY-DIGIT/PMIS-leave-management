@@ -39,6 +39,9 @@ public class MasterResource {
     @Column(name = "designation_type", length = 100)
     private String designationType;
 
+    @Column(name = "project_id", length = 50)
+    private String projectId;
+
     @Column(name = "is_active", nullable = false)
     private boolean active;
 

@@ -37,19 +37,22 @@ public class MasterResourceController {
     }
 
     /**
-     * Upload the resource master Excel: upserts every row by res_id.
+     * Upload the resource master Excel: upserts every row by res_id, all under the given project.
      * POST /api/resources/upload (multipart/form-data)
      */
     @Operation(
             summary = "Upload the resource master Excel",
             description = "Upload an .xlsx/.xls file whose first sheet has a header row followed by rows of "
                     + "[res_id, name, emailId, rate_card, date_of_joining, last_date, designationType, isactive]. "
-                    + "Each row is upserted by res_id — re-uploading updates existing resources.")
+                    + "Every resource in the file is assigned to 'projectId'. Each row is upserted by res_id — "
+                    + "re-uploading updates existing resources.")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ResourceUploadResult> upload(
+            @Parameter(description = "Project id every resource in this upload belongs to")
+                    @RequestParam("projectId") String projectId,
             @Parameter(description = "Resource master Excel file (.xlsx/.xls)") @RequestPart("file")
                     MultipartFile file) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(masterResourceService.upload(file));
+        return ResponseEntity.status(HttpStatus.CREATED).body(masterResourceService.upload(file, projectId));
     }
 
     /**

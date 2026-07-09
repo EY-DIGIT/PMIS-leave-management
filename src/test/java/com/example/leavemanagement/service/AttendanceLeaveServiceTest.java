@@ -3,17 +3,12 @@ package com.example.leavemanagement.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.leavemanagement.client.EmployeeDirectoryClient;
 import com.example.leavemanagement.client.EmployeeInfo;
 import com.example.leavemanagement.dto.EmployeeAttendance;
-import com.example.leavemanagement.dto.LeaveApplyRequest;
-import com.example.leavemanagement.dto.LeaveResponse;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
-import com.example.leavemanagement.entity.LeaveStatus;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
@@ -25,7 +20,6 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -45,9 +39,6 @@ class AttendanceLeaveServiceTest {
     private com.example.leavemanagement.repository.PublicHolidayRepository holidayRepository;
 
     @Mock
-    private LeaveService leaveService;
-
-    @Mock
     private ResourceProjectMappingRepository resourceProjectMappingRepository;
 
     @Mock
@@ -57,49 +48,6 @@ class AttendanceLeaveServiceTest {
     private AttendanceLeaveService service;
 
     private final MultipartFile anyFile = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-
-    @Test
-    void groupsConsecutiveAbsencesBridgingWeekendsAndSkippingHolidays() {
-        // June 2026 starts on a Monday. Weekends: 6,7,13,14,20,21,27,28.
-        // Absent: Fri 5, weekend 6-7, Mon 8 -> one leave 5..8 (weekend bridged).
-        //         Thu 11, Fri 12 (a public holiday), weekend 13-14 -> one leave 11..11.
-        //         (20,21 are an absent weekend with no working day -> no leave.)
-        when(parser.parse(any())).thenReturn(List.of(new EmployeeAttendance(
-                "E1", "Asha", "Dev", Set.of(5, 6, 7, 8, 11, 12, 13, 14, 20, 21), Map.of())));
-        when(directory.findByAttendanceId("E1"))
-                .thenReturn(Optional.of(new EmployeeInfo("E1", "Asha Kumar", "Dev", null)));
-        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
-                .thenReturn(List.of(new PublicHoliday(LocalDate.of(2026, 6, 12), "Test Holiday")));
-        when(leaveService.applyForLeave(any())).thenReturn(dummyResponse());
-
-        service.importLeaves(2026, 6, anyFile);
-
-        ArgumentCaptor<LeaveApplyRequest> captor = ArgumentCaptor.forClass(LeaveApplyRequest.class);
-        verify(leaveService, times(2)).applyForLeave(captor.capture());
-        List<LeaveApplyRequest> requests = captor.getAllValues();
-
-        assertThat(requests).allSatisfy(r -> assertThat(r.employeeName()).isEqualTo("Asha Kumar"));
-        assertThat(requests)
-                .extracting(LeaveApplyRequest::startDate, LeaveApplyRequest::endDate)
-                .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(LocalDate.of(2026, 6, 5), LocalDate.of(2026, 6, 8)),
-                        org.assertj.core.groups.Tuple.tuple(LocalDate.of(2026, 6, 11), LocalDate.of(2026, 6, 11)));
-    }
-
-    @Test
-    void noLeavesWhenAllAbsencesFallOnWeekends() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Bo", "QA", Set.of(6, 7, 13, 14), Map.of())));
-        when(directory.findByAttendanceId("E1"))
-                .thenReturn(Optional.of(new EmployeeInfo("E1", "Bo Lee", "QA", null)));
-        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
-                .thenReturn(List.of());
-
-        List<LeaveResponse> created = service.importLeaves(2026, 6, anyFile);
-
-        assertThat(created).isEmpty();
-        verify(leaveService, times(0)).applyForLeave(any());
-    }
 
     @Test
     void summaryCountsWeekendsHolidaysLeavesAndShortDays() {
@@ -138,25 +86,8 @@ class AttendanceLeaveServiceTest {
 
     @Test
     void rejectsInvalidMonth() {
-        assertThatThrownBy(() -> service.importLeaves(2026, 13, anyFile))
+        assertThatThrownBy(() -> service.summarize(2026, 13, anyFile))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("month");
-    }
-
-    private LeaveResponse dummyResponse() {
-        return new LeaveResponse(
-                1L,
-                "Asha Kumar",
-                null,
-                LocalDate.of(2026, 6, 5),
-                LocalDate.of(2026, 6, 8),
-                "reason",
-                LeaveStatus.PENDING,
-                0,
-                0,
-                0,
-                0,
-                List.of(),
-                null);
     }
 }

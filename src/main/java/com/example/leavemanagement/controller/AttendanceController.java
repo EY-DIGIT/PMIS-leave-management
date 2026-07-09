@@ -7,6 +7,8 @@ import com.example.leavemanagement.service.AttendanceQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.time.LocalDate;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -40,15 +42,21 @@ public class AttendanceController {
                     + "Sundays and public holidays in the month, and for each employee the number of leaves "
                     + "taken (In=0 and Out=0 on a working day) and the number of worked days under 8 hours "
                     + "(from In-Time and Out-Time). The month is also persisted, so GET /api/attendance/summary "
-                    + "and the quarterly settlement can read it.")
+                    + "and the quarterly settlement can read it. If startDate/endDate are given, they must span "
+                    + "a complete month (1st-to-last-day of a calendar month, or the same date one month later) "
+                    + "or the upload is rejected.")
     @PostMapping(value = "/summary", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public MonthlyAttendanceSummary summary(
             @Parameter(description = "Month the sheet covers (1-12)", example = "6") @RequestParam("month") int month,
             @Parameter(description = "Year the sheet covers", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
                     String milestoneId,
+            @Parameter(description = "Period start date — must, with endDate, span a complete month")
+                    @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Period end date — must, with startDate, span a complete month")
+                    @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
-        return attendanceQueryService.storeAndSummarize(year, month, milestoneId, file);
+        return attendanceQueryService.storeAndSummarize(year, month, milestoneId, startDate, endDate, file);
     }
 
     /**
@@ -59,16 +67,22 @@ public class AttendanceController {
             summary = "Store a monthly attendance sheet",
             description = "Parses and saves the month's attendance (absent weekdays + worked minutes per day). "
                     + "Re-uploading the same month overwrites it. Required before the GET summary / quarterly "
-                    + "settlement can read it.")
+                    + "settlement can read it. If startDate/endDate are given, they must span a complete month "
+                    + "(1st-to-last-day of a calendar month, or the same date one month later) or the upload "
+                    + "is rejected.")
     @PostMapping(value = "/monthly", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<MonthlyAttendanceStored> storeMonthly(
             @Parameter(description = "Month the sheet covers (1-12)", example = "6") @RequestParam("month") int month,
             @Parameter(description = "Year the sheet covers", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
                     String milestoneId,
+            @Parameter(description = "Period start date — must, with endDate, span a complete month")
+                    @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Period end date — must, with startDate, span a complete month")
+                    @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(attendanceQueryService.storeMonthly(year, month, milestoneId, file));
+                .body(attendanceQueryService.storeMonthly(year, month, milestoneId, startDate, endDate, file));
     }
 
     /**

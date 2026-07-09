@@ -10,4 +10,5 @@ public record ResourceResponse(
         LocalDate dateOfJoining,
         LocalDate lastDate,
         String designationType,
-        boolean active) {}
+        boolean active,
+        String projectId) {}
