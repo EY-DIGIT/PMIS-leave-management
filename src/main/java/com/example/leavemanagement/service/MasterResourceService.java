@@ -62,11 +62,12 @@ public class MasterResourceService {
             String name,
             String emailId,
             String designationType,
+            String projectId,
             Boolean active,
             LocalDate joinedFrom,
             LocalDate joinedTo) {
         Specification<MasterResource> spec = buildSpecification(
-                resId, name, emailId, designationType, active, joinedFrom, joinedTo);
+                resId, name, emailId, designationType, projectId, active, joinedFrom, joinedTo);
         return repository.findAll(spec).stream().map(this::toResponse).toList();
     }
 
@@ -94,6 +95,7 @@ public class MasterResourceService {
             String name,
             String emailId,
             String designationType,
+            String projectId,
             Boolean active,
             LocalDate joinedFrom,
             LocalDate joinedTo) {
@@ -110,6 +112,9 @@ public class MasterResourceService {
         }
         if (designationType != null && !designationType.isBlank()) {
             specs.add((root, query, cb) -> cb.equal(cb.lower(root.get("designationType")), designationType.toLowerCase()));
+        }
+        if (projectId != null && !projectId.isBlank()) {
+            specs.add((root, query, cb) -> cb.equal(root.get("projectId"), projectId));
         }
         if (active != null) {
             specs.add((root, query, cb) -> cb.equal(root.get("active"), active));

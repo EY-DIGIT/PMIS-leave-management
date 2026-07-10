@@ -57,13 +57,14 @@ public class MasterResourceController {
 
     /**
      * Search resources with all-optional filters.
-     * GET /api/resources?name=&emailId=&designationType=&active=&joinedFrom=&joinedTo=
+     * GET /api/resources?projectId=&name=&emailId=&designationType=&active=&joinedFrom=&joinedTo=
      */
     @Operation(
             summary = "Search resources",
             description = "All parameters are optional and combine with AND. name/emailId are case-insensitive "
-                    + "contains matches; resId/designationType/active are exact matches; joinedFrom/joinedTo "
-                    + "bound date_of_joining (inclusive).")
+                    + "contains matches; resId/designationType/projectId/active are exact matches; "
+                    + "joinedFrom/joinedTo bound date_of_joining (inclusive). Pass projectId to get only the "
+                    + "resources assigned to that project instead of every resource.")
     @GetMapping
     public List<ResourceResponse> search(
             @Parameter(description = "Exact res_id") @RequestParam(required = false) String resId,
@@ -72,12 +73,15 @@ public class MasterResourceController {
                     @RequestParam(required = false) String emailId,
             @Parameter(description = "Exact designation type") @RequestParam(required = false)
                     String designationType,
+            @Parameter(description = "Exact project id — only resources assigned to this project")
+                    @RequestParam(required = false) String projectId,
             @Parameter(description = "Filter by active/inactive") @RequestParam(required = false) Boolean active,
             @Parameter(description = "date_of_joining >= this date")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate joinedFrom,
             @Parameter(description = "date_of_joining <= this date")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate joinedTo) {
-        return masterResourceService.search(resId, name, emailId, designationType, active, joinedFrom, joinedTo);
+        return masterResourceService.search(
+                resId, name, emailId, designationType, projectId, active, joinedFrom, joinedTo);
     }
 
     /** Get a single resource by res_id. GET /api/resources/{resId} */
