@@ -42,21 +42,24 @@ public class AttendanceController {
                     + "Sundays and public holidays in the month, and for each employee the number of leaves "
                     + "taken (In=0 and Out=0 on a working day) and the number of worked days under 8 hours "
                     + "(from In-Time and Out-Time). The month is also persisted, so GET /api/attendance/summary "
-                    + "and the quarterly settlement can read it. If startDate/endDate are given, they must span "
-                    + "a complete month (1st-to-last-day of a calendar month, or the same date one month later) "
-                    + "or the upload is rejected.")
+                    + "and the quarterly settlement can read it. Every resource in the sheet must belong to "
+                    + "'projectId' (checked against the master resource table) or the upload is rejected. If "
+                    + "startDate/endDate are given, they must span a complete month (1st-to-last-day of a "
+                    + "calendar month, or the same date one month later) or the upload is rejected.")
     @PostMapping(value = "/summary", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public MonthlyAttendanceSummary summary(
             @Parameter(description = "Month the sheet covers (1-12)", example = "6") @RequestParam("month") int month,
             @Parameter(description = "Year the sheet covers", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
                     String milestoneId,
+            @Parameter(description = "Project id every resource in this upload must belong to")
+                    @RequestParam("projectId") String projectId,
             @Parameter(description = "Period start date — must, with endDate, span a complete month")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @Parameter(description = "Period end date — must, with startDate, span a complete month")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
-        return attendanceQueryService.storeAndSummarize(year, month, milestoneId, startDate, endDate, file);
+        return attendanceQueryService.storeAndSummarize(year, month, milestoneId, projectId, startDate, endDate, file);
     }
 
     /**
@@ -67,22 +70,26 @@ public class AttendanceController {
             summary = "Store a monthly attendance sheet",
             description = "Parses and saves the month's attendance (absent weekdays + worked minutes per day). "
                     + "Re-uploading the same month overwrites it. Required before the GET summary / quarterly "
-                    + "settlement can read it. If startDate/endDate are given, they must span a complete month "
-                    + "(1st-to-last-day of a calendar month, or the same date one month later) or the upload "
-                    + "is rejected.")
+                    + "settlement can read it. Every resource in the sheet must belong to 'projectId' (checked "
+                    + "against the master resource table) or the upload is rejected. If startDate/endDate are "
+                    + "given, they must span a complete month (1st-to-last-day of a calendar month, or the same "
+                    + "date one month later) or the upload is rejected.")
     @PostMapping(value = "/monthly", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<MonthlyAttendanceStored> storeMonthly(
             @Parameter(description = "Month the sheet covers (1-12)", example = "6") @RequestParam("month") int month,
             @Parameter(description = "Year the sheet covers", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
                     String milestoneId,
+            @Parameter(description = "Project id every resource in this upload must belong to")
+                    @RequestParam("projectId") String projectId,
             @Parameter(description = "Period start date — must, with endDate, span a complete month")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @Parameter(description = "Period end date — must, with startDate, span a complete month")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(attendanceQueryService.storeMonthly(year, month, milestoneId, startDate, endDate, file));
+                .body(attendanceQueryService.storeMonthly(
+                        year, month, milestoneId, projectId, startDate, endDate, file));
     }
 
     /**
@@ -94,13 +101,16 @@ public class AttendanceController {
             description = "Read from attendance previously stored via the upload: Saturday/Sunday/public-holiday "
                     + "counts plus per-employee leaves taken and worked days under 8 hours. month=1..12 returns a "
                     + "single MonthlyAttendanceSummary; month=all (the default) returns an AttendanceSummaryReport "
-                    + "with one summary per stored month of the year.")
+                    + "with one summary per stored month of the year. Pass projectId to restrict to resources "
+                    + "uploaded under that project.")
     @GetMapping("/summary")
     public Object monthlySummary(
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Month 1-12, or 'all' for every stored month", example = "all")
-                    @RequestParam(name = "month", required = false, defaultValue = "all") String month) {
-        return attendanceQueryService.summary(year, month);
+                    @RequestParam(name = "month", required = false, defaultValue = "all") String month,
+            @Parameter(description = "Restrict to this project id") @RequestParam(required = false)
+                    String projectId) {
+        return attendanceQueryService.summary(year, month, projectId);
     }
 
     /**
@@ -111,11 +121,14 @@ public class AttendanceController {
             summary = "Quarterly leave-policy settlement (UIDAI 5.24.1)",
             description = "Applies the policy over the quarter's stored attendance: up to 6 paid leave days "
                     + "(pro-rata for mid-quarter joiners), the rest unpaid, with sandwich-leave weekend/holiday "
-                    + "charging. Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec.")
+                    + "charging. Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec. Pass "
+                    + "projectId to restrict to resources uploaded under that project.")
     @GetMapping("/quarterly-leave")
     public QuarterLeaveReport quarterlyLeave(
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
-            @Parameter(description = "Quarter (1-4)", example = "2") @RequestParam("quarter") int quarter) {
-        return attendanceQueryService.quarterlySettlement(year, quarter);
+            @Parameter(description = "Quarter (1-4)", example = "2") @RequestParam("quarter") int quarter,
+            @Parameter(description = "Restrict to this project id") @RequestParam(required = false)
+                    String projectId) {
+        return attendanceQueryService.quarterlySettlement(year, quarter, projectId);
     }
 }

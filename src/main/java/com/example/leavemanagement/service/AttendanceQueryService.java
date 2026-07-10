@@ -30,7 +30,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -88,12 +87,18 @@ public class AttendanceQueryService {
      */
     @Transactional
     public MonthlyAttendanceStored storeMonthly(
-            int year, int month, String milestoneId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
+            int year,
+            int month,
+            String milestoneId,
+            String projectId,
+            LocalDate startDate,
+            LocalDate endDate,
+            MultipartFile file) {
         validateMonthAndYear(year, month);
         validateCompleteMonthRange(startDate, endDate);
         List<EmployeeAttendance> parsed = parser.parse(file);
-        Map<String, LeavePolicyResponse> leavePolicies = validateResourcesAndFetchLeavePolicies(parsed);
-        int stored = persist(year, month, milestoneId, parsed);
+        Map<String, LeavePolicyResponse> leavePolicies = validateResourcesAndFetchLeavePolicies(parsed, projectId);
+        int stored = persist(year, month, milestoneId, projectId, parsed);
         return new MonthlyAttendanceStored(year, month, stored, leavePolicies);
     }
 
@@ -104,12 +109,18 @@ public class AttendanceQueryService {
      */
     @Transactional
     public MonthlyAttendanceSummary storeAndSummarize(
-            int year, int month, String milestoneId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
+            int year,
+            int month,
+            String milestoneId,
+            String projectId,
+            LocalDate startDate,
+            LocalDate endDate,
+            MultipartFile file) {
         validateMonthAndYear(year, month);
         validateCompleteMonthRange(startDate, endDate);
         List<EmployeeAttendance> parsed = parser.parse(file);
-        validateResourcesAndFetchLeavePolicies(parsed);
-        persist(year, month, milestoneId, parsed);
+        validateResourcesAndFetchLeavePolicies(parsed, projectId);
+        persist(year, month, milestoneId, projectId, parsed);
         return attendanceLeaveService.buildSummary(year, month, parsed);
     }
 
@@ -144,14 +155,14 @@ public class AttendanceQueryService {
 
     /**
      * For every row in the uploaded sheet, checks that its Attendance ID exists as an active
-     * {@link MasterResource} with a project id, then fetches that project's leave policy from the
-     * external leave-policy API. If any row fails validation (or a policy fetch fails), the whole
-     * upload is rejected with every collected error and nothing is persisted.
+     * {@link MasterResource} belonging to the upload's {@code projectId}, then fetches that
+     * project's leave policy from the external leave-policy API. If any row fails validation (or
+     * the policy fetch fails), the whole upload is rejected with every collected error and nothing
+     * is persisted.
      */
     private Map<String, LeavePolicyResponse> validateResourcesAndFetchLeavePolicies(
-            List<EmployeeAttendance> employees) {
+            List<EmployeeAttendance> employees, String projectId) {
         List<String> errors = new ArrayList<>();
-        Set<String> projectIds = new LinkedHashSet<>();
 
         for (EmployeeAttendance employee : employees) {
             String attendanceId = employee.attendanceId();
@@ -164,23 +175,24 @@ public class AttendanceQueryService {
                 errors.add("Resource " + attendanceId + " is inactive.");
                 continue;
             }
-            String projectId = resource.get().getProjectId();
-            if (projectId == null || projectId.isBlank()) {
+            String actualProjectId = resource.get().getProjectId();
+            if (actualProjectId == null || actualProjectId.isBlank()) {
                 errors.add("Resource " + attendanceId + " has no project id configured.");
                 continue;
             }
-            projectIds.add(projectId);
+            if (!actualProjectId.equals(projectId)) {
+                errors.add("Resource " + attendanceId + " belongs to project " + actualProjectId
+                        + ", not " + projectId + ".");
+            }
         }
 
         Map<String, LeavePolicyResponse> leavePoliciesByProject = new LinkedHashMap<>();
         if (errors.isEmpty()) {
-            for (String projectId : projectIds) {
-                leavePolicyClient
-                        .getLeavePolicy(projectId)
-                        .ifPresentOrElse(
-                                policy -> leavePoliciesByProject.put(projectId, policy),
-                                () -> errors.add("Could not fetch leave policy for project " + projectId + "."));
-            }
+            leavePolicyClient
+                    .getLeavePolicy(projectId)
+                    .ifPresentOrElse(
+                            policy -> leavePoliciesByProject.put(projectId, policy),
+                            () -> errors.add("Could not fetch leave policy for project " + projectId + "."));
         }
 
         if (!errors.isEmpty()) {
@@ -190,7 +202,8 @@ public class AttendanceQueryService {
     }
 
     /** Replaces the month's stored rows with the freshly parsed set (handles repeated/masked ids). */
-    private int persist(int year, int month, String milestoneId, List<EmployeeAttendance> employees) {
+    private int persist(
+            int year, int month, String milestoneId, String projectId, List<EmployeeAttendance> employees) {
         List<ResourceMonthlyAttendance> existing = attendanceRepository.findByYearAndMonth(year, month);
         if (!existing.isEmpty()) {
             attendanceRepository.deleteAll(existing);
@@ -203,6 +216,7 @@ public class AttendanceQueryService {
                     employee.employeeName(),
                     employee.designation(),
                     milestoneId,
+                    projectId,
                     year,
                     month);
             row.setAbsentDays(absentWeekdays(year, month, employee.absentDays()));
@@ -220,31 +234,41 @@ public class AttendanceQueryService {
      * {@code month}=null/blank/"all".
      */
     @Transactional(readOnly = true)
-    public Object summary(int year, String month) {
+    public Object summary(int year, String month, String projectId) {
         Integer monthValue = parseMonthParam(month);
-        return monthValue != null ? monthlySummary(year, monthValue) : allMonthsSummary(year);
+        return monthValue != null ? monthlySummary(year, monthValue, projectId) : allMonthsSummary(year, projectId);
     }
 
-    /** Flat summary for one stored month. */
+    /** Flat summary for one stored month, optionally restricted to one project. */
     @Transactional(readOnly = true)
-    public MonthlyAttendanceSummary monthlySummary(int year, int month) {
+    public MonthlyAttendanceSummary monthlySummary(int year, int month, String projectId) {
         validateMonthAndYear(year, month);
-        return summaryFromRows(year, month, attendanceRepository.findByYearAndMonth(year, month));
+        List<ResourceMonthlyAttendance> rows = isBlank(projectId)
+                ? attendanceRepository.findByYearAndMonth(year, month)
+                : attendanceRepository.findByYearAndMonthAndProjectId(year, month, projectId);
+        return summaryFromRows(year, month, rows);
     }
 
-    /** One summary per stored month of the year, sorted ascending. */
+    /** One summary per stored month of the year, sorted ascending, optionally restricted to one project. */
     @Transactional(readOnly = true)
-    public AttendanceSummaryReport allMonthsSummary(int year) {
+    public AttendanceSummaryReport allMonthsSummary(int year, String projectId) {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
-        Map<Integer, List<ResourceMonthlyAttendance>> byMonth = attendanceRepository.findByYear(year).stream()
-                .collect(Collectors.groupingBy(ResourceMonthlyAttendance::getMonth));
+        List<ResourceMonthlyAttendance> yearRows = isBlank(projectId)
+                ? attendanceRepository.findByYear(year)
+                : attendanceRepository.findByYearAndProjectId(year, projectId);
+        Map<Integer, List<ResourceMonthlyAttendance>> byMonth =
+                yearRows.stream().collect(Collectors.groupingBy(ResourceMonthlyAttendance::getMonth));
         List<MonthlyAttendanceSummary> months = byMonth.keySet().stream()
                 .sorted()
                 .map(m -> summaryFromRows(year, m, byMonth.get(m)))
                 .toList();
         return new AttendanceSummaryReport(year, null, months);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private MonthlyAttendanceSummary summaryFromRows(int year, int month, List<ResourceMonthlyAttendance> rows) {
@@ -283,6 +307,12 @@ public class AttendanceQueryService {
      */
     @Transactional(readOnly = true)
     public QuarterLeaveReport quarterlySettlement(int year, int quarter) {
+        return quarterlySettlement(year, quarter, null);
+    }
+
+    /** Same as {@link #quarterlySettlement(int, int)}, optionally restricted to one project. */
+    @Transactional(readOnly = true)
+    public QuarterLeaveReport quarterlySettlement(int year, int quarter, String projectId) {
         if (quarter < 1 || quarter > 4) {
             throw new BadRequestException("quarter must be between 1 and 4");
         }
@@ -300,7 +330,9 @@ public class AttendanceQueryService {
                         .map(PublicHoliday::getHolidayDate)
                         .collect(Collectors.toSet());
 
-        List<ResourceMonthlyAttendance> rows = attendanceRepository.findByYearAndMonthIn(year, months);
+        List<ResourceMonthlyAttendance> rows = isBlank(projectId)
+                ? attendanceRepository.findByYearAndMonthIn(year, months)
+                : attendanceRepository.findByYearAndMonthInAndProjectId(year, months, projectId);
         Set<Integer> monthsWithData =
                 rows.stream().map(ResourceMonthlyAttendance::getMonth).collect(Collectors.toCollection(HashSet::new));
 
