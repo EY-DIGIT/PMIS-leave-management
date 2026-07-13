@@ -1,5 +1,6 @@
 package com.example.leavemanagement.controller;
 
+/*
 import com.example.leavemanagement.dto.ProjectConfigRequest;
 import com.example.leavemanagement.dto.ProjectConfigResponse;
 import com.example.leavemanagement.dto.ResourceProjectRequest;
@@ -67,3 +68,4 @@ public class ProjectConfigController {
         return ResponseEntity.noContent().build();
     }
 }
+*/

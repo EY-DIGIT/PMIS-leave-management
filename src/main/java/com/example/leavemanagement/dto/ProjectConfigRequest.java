@@ -1,5 +1,6 @@
 package com.example.leavemanagement.dto;
 
+/*
 import com.example.leavemanagement.entity.LeaveFrequency;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -13,3 +14,4 @@ public record ProjectConfigRequest(
         @Positive double halfDayHours,
         @NotNull LeaveFrequency leaveFrequency,
         @Min(1) int maxLeavesPerPeriod) {}
+*/

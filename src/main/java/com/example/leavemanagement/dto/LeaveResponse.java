@@ -1,15 +1,12 @@
 package com.example.leavemanagement.dto;
 
+/*
 import com.example.leavemanagement.entity.LeaveRequest;
 import com.example.leavemanagement.entity.LeaveStatus;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
-/**
- * Response describing a leave application and how its days break down:
- * total calendar days = workingDays + weekendDays + holidayDays.
- */
 public record LeaveResponse(
         Long id,
         String employeeName,
@@ -42,3 +39,4 @@ public record LeaveResponse(
                 req.getAppliedOn());
     }
 }
+*/

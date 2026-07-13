@@ -1,5 +1,6 @@
 package com.example.leavemanagement.service;
 
+/*
 import com.example.leavemanagement.dto.HolidayItem;
 import com.example.leavemanagement.dto.LeaveApplyRequest;
 import com.example.leavemanagement.dto.LeaveDayBreakdown;
@@ -31,7 +32,7 @@ public class LeaveService {
         this.holidayRepository = holidayRepository;
     }
 
-    /** Applies for leave; the chargeable working days are computed and stored. */
+    // Applies for leave; the chargeable working days are computed and stored.
     @Transactional
     public LeaveResponse applyForLeave(LeaveApplyRequest request) {
         if (request.endDate().isBefore(request.startDate())) {
@@ -55,7 +56,7 @@ public class LeaveService {
         return LeaveResponse.from(req, computeBreakdown(req.getStartDate(), req.getEndDate()));
     }
 
-    /** Lists leave requests, optionally filtered by employee name. */
+    // Lists leave requests, optionally filtered by employee name.
     @Transactional(readOnly = true)
     public List<LeaveResponse> listLeaves(String employeeName) {
         List<LeaveRequest> requests = (employeeName == null || employeeName.isBlank())
@@ -66,7 +67,7 @@ public class LeaveService {
                 .toList();
     }
 
-    /** Updates employee details, dates and reason of an existing leave request. */
+    // Updates employee details, dates and reason of an existing leave request.
     @Transactional
     public LeaveResponse updateLeave(Long id, LeaveUpdateRequest request) {
         if (request.endDate().isBefore(request.startDate())) {
@@ -83,7 +84,7 @@ public class LeaveService {
         return LeaveResponse.from(req, breakdown);
     }
 
-    /** Moves a request to APPROVED / REJECTED / CANCELLED. */
+    // Moves a request to APPROVED / REJECTED / CANCELLED.
     @Transactional
     public LeaveResponse updateStatus(Long id, LeaveStatus status) {
         LeaveRequest req = findOrThrow(id);
@@ -95,11 +96,9 @@ public class LeaveService {
         return leaveRepository.findById(id).orElseThrow(() -> new NotFoundException("No leave request with id " + id));
     }
 
-    /**
-     * Splits the inclusive date range into working days, weekend days and
-     * public-holiday days. A holiday that falls on a weekend is counted as a
-     * weekend day only, so the three buckets always sum to the calendar days.
-     */
+    // Splits the inclusive date range into working days, weekend days and
+    // public-holiday days. A holiday that falls on a weekend is counted as a
+    // weekend day only, so the three buckets always sum to the calendar days.
     private LeaveDayBreakdown computeBreakdown(LocalDate start, LocalDate end) {
         // A date may carry several holidays; join their names so the breakdown
         // shows all of them while the day is still counted once.
@@ -133,3 +132,4 @@ public class LeaveService {
         return new LeaveDayBreakdown(total, working, weekend, holidayDays, List.copyOf(holidaysInRange));
     }
 }
+*/

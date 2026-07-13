@@ -22,15 +22,17 @@ public class LeaveReportController {
     @GetMapping("/leave")
     public LeaveReportSummary quarterlySummary(
             @RequestParam("year") int year,
-            @RequestParam("quarter") int quarter) {
-        return leaveReportService.quarterlySummary(year, quarter);
+            @RequestParam("quarter") int quarter,
+            @RequestParam(required = false) String projectId) {
+        return leaveReportService.quarterlySummary(year, quarter, projectId);
     }
 
     @GetMapping("/leave/{attendanceId}")
     public EmployeeLeaveDetail employeeDetail(
             @PathVariable String attendanceId,
             @RequestParam("year") int year,
-            @RequestParam("quarter") int quarter) {
-        return leaveReportService.employeeDetail(attendanceId, year, quarter);
+            @RequestParam("quarter") int quarter,
+            @RequestParam(required = false) String projectId) {
+        return leaveReportService.employeeDetail(attendanceId, year, quarter, projectId);
     }
 }

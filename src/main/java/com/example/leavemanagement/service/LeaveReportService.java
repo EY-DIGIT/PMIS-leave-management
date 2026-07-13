@@ -11,6 +11,7 @@ import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.entity.ResourceMonthlyAttendance;
 import com.example.leavemanagement.entity.ResourceProjectMapping;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import com.example.leavemanagement.repository.ResourceMonthlyAttendanceRepository;
@@ -50,12 +51,12 @@ public class LeaveReportService {
     }
 
     @Transactional(readOnly = true)
-    public LeaveReportSummary quarterlySummary(int year, int quarter) {
-        QuarterLeaveReport report = attendanceQueryService.quarterlySettlement(year, quarter);
+    public LeaveReportSummary quarterlySummary(int year, int quarter, String projectId) {
+        QuarterLeaveReport report = attendanceQueryService.quarterlySettlement(year, quarter, projectId);
 
         List<LeaveReportEntry> entries = report.resources().stream()
                 .map(settlement -> {
-                    String projectId = resourceProjectMappingRepository
+                    String resourceProjectId = resourceProjectMappingRepository
                             .findById(settlement.attendanceId())
                             .map(ResourceProjectMapping::getProjectId)
                             .orElse(null);
@@ -63,7 +64,7 @@ public class LeaveReportService {
                     return new LeaveReportEntry(
                             settlement.attendanceId(),
                             settlement.employeeName(),
-                            projectId,
+                            resourceProjectId,
                             calc.permissibleLeave(),
                             calc.leaveDaysTaken(),
                             calc.paidLeaveDays(),
@@ -84,7 +85,7 @@ public class LeaveReportService {
     }
 
     @Transactional(readOnly = true)
-    public EmployeeLeaveDetail employeeDetail(String attendanceId, int year, int quarter) {
+    public EmployeeLeaveDetail employeeDetail(String attendanceId, int year, int quarter, String filterProjectId) {
         if (quarter < 1 || quarter > 4) {
             throw new BadRequestException("quarter must be between 1 and 4");
         }
@@ -123,6 +124,10 @@ public class LeaveReportService {
                 resourceProjectMappingRepository.findById(attendanceId).orElse(null);
 
         String projectId = mapping != null ? mapping.getProjectId() : null;
+        if (filterProjectId != null && !filterProjectId.isBlank() && !filterProjectId.equals(projectId)) {
+            throw new NotFoundException(
+                    "No leave record for attendanceId " + attendanceId + " under project " + filterProjectId);
+        }
         ProjectConfig config = Optional.ofNullable(projectId)
                 .flatMap(projectConfigRepository::findById)
                 .orElse(null);

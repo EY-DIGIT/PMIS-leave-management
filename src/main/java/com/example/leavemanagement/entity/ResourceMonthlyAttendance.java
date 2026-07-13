@@ -55,6 +55,9 @@ public class ResourceMonthlyAttendance {
     @Column(name = "milestone_id")
     private String milestoneId;
 
+    @Column(name = "project_id")
+    private String projectId;
+
     @Column(name = "att_year", nullable = false)
     @Setter(AccessLevel.NONE)
     private int year;
@@ -95,10 +98,22 @@ public class ResourceMonthlyAttendance {
             String milestoneId,
             int year,
             int month) {
+        this(attendanceId, employeeName, designation, milestoneId, null, year, month);
+    }
+
+    public ResourceMonthlyAttendance(
+            String attendanceId,
+            String employeeName,
+            String designation,
+            String milestoneId,
+            String projectId,
+            int year,
+            int month) {
         this.attendanceId = attendanceId;
         this.employeeName = employeeName;
         this.designation = designation;
         this.milestoneId = milestoneId;
+        this.projectId = projectId;
         this.year = year;
         this.month = month;
     }

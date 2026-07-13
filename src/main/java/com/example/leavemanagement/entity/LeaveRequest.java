@@ -1,5 +1,6 @@
 package com.example.leavemanagement.entity;
 
+/*
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -15,10 +16,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
-/**
- * A leave application by an employee. {@code workingDays} is the number of days
- * actually consumed: calendar days minus weekends and public holidays.
- */
 @Entity
 @Table(name = "leave_request")
 @Getter
@@ -49,7 +46,7 @@ public class LeaveRequest {
     @Column(name = "status", nullable = false, length = 20)
     private LeaveStatus status = LeaveStatus.PENDING;
 
-    /** Chargeable leave days (weekends and public holidays excluded). */
+    // Chargeable leave days (weekends and public holidays excluded).
     @Column(name = "working_days", nullable = false)
     private int workingDays;
 
@@ -72,3 +69,4 @@ public class LeaveRequest {
         this.status = LeaveStatus.PENDING;
     }
 }
+*/
