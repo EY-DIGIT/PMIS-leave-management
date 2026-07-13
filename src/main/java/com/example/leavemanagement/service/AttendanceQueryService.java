@@ -166,13 +166,13 @@ public class AttendanceQueryService {
 
         for (EmployeeAttendance employee : employees) {
             String attendanceId = employee.attendanceId();
-            Optional<MasterResource> resource = masterResourceRepository.findById(attendanceId);
+            Optional<MasterResource> resource = masterResourceRepository.findByResIdAndActiveTrue(attendanceId);
             if (resource.isEmpty()) {
-                errors.add("Resource " + attendanceId + " does not exist.");
-                continue;
-            }
-            if (!resource.get().isActive()) {
-                errors.add("Resource " + attendanceId + " is inactive.");
+                if (masterResourceRepository.existsByResId(attendanceId)) {
+                    errors.add("Resource " + attendanceId + " is inactive.");
+                } else {
+                    errors.add("Resource " + attendanceId + " does not exist.");
+                }
                 continue;
             }
             String actualProjectId = resource.get().getProjectId();
@@ -209,12 +209,13 @@ public class AttendanceQueryService {
             attendanceRepository.deleteAll(existing);
             attendanceRepository.flush(); // apply deletes before inserting the replacements
         }
+        LocalDate asOfDate = LocalDate.of(year, month, 1);
         int stored = 0;
         for (EmployeeAttendance employee : employees) {
             ResourceMonthlyAttendance row = new ResourceMonthlyAttendance(
                     employee.attendanceId(),
                     employee.employeeName(),
-                    employee.designation(),
+                    resolveDesignation(employee, asOfDate),
                     milestoneId,
                     projectId,
                     year,
@@ -225,6 +226,20 @@ public class AttendanceQueryService {
             stored++;
         }
         return stored;
+    }
+
+    /**
+     * The resource's designation as of the 1st of the attendance month, per the master resource's
+     * history (a resource can have multiple designations over time). Falls back to the attendance
+     * sheet's own designation column when no history row covers that date (e.g. a resource that
+     * joined mid-month, before its first full month is uploaded).
+     */
+    private String resolveDesignation(EmployeeAttendance employee, LocalDate asOfDate) {
+        return masterResourceRepository
+                .findEffectiveOn(employee.attendanceId(), asOfDate)
+                .map(MasterResource::getDesignationType)
+                .filter(designation -> designation != null && !designation.isBlank())
+                .orElseGet(employee::designation);
     }
 
     /**

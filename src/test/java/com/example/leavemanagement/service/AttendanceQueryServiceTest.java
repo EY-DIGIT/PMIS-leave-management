@@ -211,7 +211,8 @@ class AttendanceQueryServiceTest {
     void storeMonthlyRejectsWholeUploadWhenResourceDoesNotExist() {
         when(parser.parse(any()))
                 .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
-        when(masterResourceRepository.findById("E1")).thenReturn(Optional.empty());
+        when(masterResourceRepository.findByResIdAndActiveTrue("E1")).thenReturn(Optional.empty());
+        when(masterResourceRepository.existsByResId("E1")).thenReturn(false);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
         assertThatThrownBy(() -> service.storeMonthly(2024, 6, "M1", "P1", null, null, file))
@@ -225,9 +226,8 @@ class AttendanceQueryServiceTest {
     void storeMonthlyRejectsWholeUploadWhenResourceIsInactive() {
         when(parser.parse(any()))
                 .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
-        MasterResource inactive = new MasterResource("E1");
-        inactive.setActive(false);
-        when(masterResourceRepository.findById("E1")).thenReturn(Optional.of(inactive));
+        when(masterResourceRepository.findByResIdAndActiveTrue("E1")).thenReturn(Optional.empty());
+        when(masterResourceRepository.existsByResId("E1")).thenReturn(true);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
         assertThatThrownBy(() -> service.storeMonthly(2024, 6, "M1", "P1", null, null, file))
@@ -354,7 +354,7 @@ class AttendanceQueryServiceTest {
         MasterResource resource = new MasterResource(attendanceId);
         resource.setActive(true);
         resource.setProjectId(projectId);
-        when(masterResourceRepository.findById(attendanceId)).thenReturn(Optional.of(resource));
+        when(masterResourceRepository.findByResIdAndActiveTrue(attendanceId)).thenReturn(Optional.of(resource));
     }
 
     private ResourceMonthlyAttendance row(String id, String name, int year, int month, Set<Integer> absentDays) {

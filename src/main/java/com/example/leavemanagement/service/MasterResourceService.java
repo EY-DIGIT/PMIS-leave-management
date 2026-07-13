@@ -10,13 +10,20 @@ import com.example.leavemanagement.repository.MasterResourceRepository;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-/** Uploads, reads, searches and updates the master resource (workforce) table. */
+/**
+ * Uploads, reads, searches and updates the master resource (workforce) table.
+ *
+ * <p>A resource can have several history rows over time (one per designation/employment stint).
+ * {@link #upload} decides, per uploaded row, whether to update the current stint in place or
+ * close it out and open a new one — see the three cases inline in {@link #upload}.
+ */
 @Service
 public class MasterResourceService {
 
@@ -28,34 +35,91 @@ public class MasterResourceService {
         this.repository = repository;
     }
 
-    /** Parses the resource master Excel and upserts every row by res_id, all under the given project. */
+    /**
+     * Parses the resource master Excel and upserts every row, all under the given project.
+     * emailId isn't part of this sheet, so it's left untouched (null for brand-new resources) —
+     * set it via the update endpoint instead.
+     *
+     * <p>For each row, compared against the resource's current active stint (if any):
+     *
+     * <ul>
+     *   <li>No active stint exists (brand-new resource, or a rejoin after a prior stint ended) —
+     *       insert a new stint.
+     *   <li>An active stint exists with a <b>different</b> designation and the row is still active
+     *       — close the old stint (its last day becomes the day before the new row's date of
+     *       joining) and insert a new stint. This preserves designation history.
+     *   <li>Otherwise (same designation, or the row signals resignation) — update the current
+     *       stint in place. No history row is created for routine field corrections or for
+     *       marking a resignation.
+     * </ul>
+     */
     @Transactional
     public ResourceUploadResult upload(MultipartFile file, String projectId) {
         List<ResourceRow> rows = parser.parse(file);
         int stored = 0;
         for (ResourceRow row : rows) {
-            MasterResource resource =
-                    repository.findById(row.resId()).orElse(new MasterResource(row.resId()));
-            resource.setName(row.name());
-            resource.setEmailId(row.emailId());
-            resource.setRateCard(row.rateCard());
-            resource.setDateOfJoining(row.dateOfJoining());
-            resource.setLastDate(row.lastDate());
-            resource.setDesignationType(row.designationType());
-            resource.setActive(row.active());
-            resource.setProjectId(projectId);
-            repository.save(resource);
+            Optional<MasterResource> current = repository.findByResIdAndActiveTrue(row.resId());
+
+            if (current.isPresent()
+                    && row.active()
+                    && !Objects.equals(current.get().getDesignationType(), row.role())) {
+                MasterResource previousStint = current.get();
+                previousStint.setLastDate(row.dateOfJoining().minusDays(1));
+                previousStint.setActive(false);
+                repository.save(previousStint);
+                applyRow(new MasterResource(row.resId()), row, projectId);
+            } else {
+                MasterResource stint = current.orElseGet(() -> new MasterResource(row.resId()));
+                applyRow(stint, row, projectId);
+            }
             stored++;
         }
         return new ResourceUploadResult(rows.size(), stored);
     }
 
-    @Transactional(readOnly = true)
-    public ResourceResponse getResource(String resId) {
-        return toResponse(findOrThrow(resId));
+    private void applyRow(MasterResource target, ResourceRow row, String projectId) {
+        target.setName(row.name());
+        target.setDesignationType(row.role());
+        target.setLocation(row.location());
+        target.setDateOfJoining(row.dateOfJoining());
+        target.setLastDate(row.lastDayOfWorking());
+        target.setRateCardByYear(row.rateCardByYear());
+        target.setCategory(row.category());
+        target.setCategoryDetails(row.categoryDetails());
+        target.setActive(row.active());
+        target.setProjectId(projectId);
+        repository.save(target);
     }
 
-    /** Search with all-optional filters; unset parameters are not applied. */
+    /** The resource's current stint, falling back to its most recent stint if none is active. */
+    @Transactional(readOnly = true)
+    public ResourceResponse getResource(String resId) {
+        return toResponse(findCurrentOrLatest(resId));
+    }
+
+    /** Every historical stint for a resource, oldest first. Returns an empty list if resId is unknown. */
+    @Transactional(readOnly = true)
+    public List<ResourceResponse> getHistory(String resId) {
+        return repository.findByResIdOrderByDateOfJoiningAsc(resId).stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    /**
+     * The distinct rate-card years configured (e.g. "Year-1".."Year-7", no amounts) across every
+     * currently active resource under a project — one flat, deduplicated list, not broken out per
+     * resource. Returns an empty list if the project has no active resources.
+     */
+    @Transactional(readOnly = true)
+    public List<String> getRateCardsByProject(String projectId) {
+        return repository.findByProjectIdAndActiveTrue(projectId).stream()
+                .flatMap(r -> r.getRateCardByYear().keySet().stream())
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    /** Search with all-optional filters; unset parameters are not applied. Matches across all stints. */
     @Transactional(readOnly = true)
     public List<ResourceResponse> search(
             String resId,
@@ -71,22 +135,30 @@ public class MasterResourceService {
         return repository.findAll(spec).stream().map(this::toResponse).toList();
     }
 
+    /** Updates the resource's current stint in place. Does not trigger designation-history logic. */
     @Transactional
     public ResourceResponse updateResource(String resId, ResourceUpdateRequest request) {
-        MasterResource resource = findOrThrow(resId);
+        MasterResource resource = repository
+                .findByResIdAndActiveTrue(resId)
+                .orElseThrow(() -> new NotFoundException("No active resource with res_id " + resId));
         resource.setName(request.name());
         resource.setEmailId(request.emailId());
-        resource.setRateCard(request.rateCard());
+        resource.setDesignationType(request.designationType());
+        resource.setLocation(request.location());
+        resource.setRateCardByYear(request.rateCardByYear());
+        resource.setCategory(request.category());
+        resource.setCategoryDetails(request.categoryDetails());
         resource.setDateOfJoining(request.dateOfJoining());
         resource.setLastDate(request.lastDate());
-        resource.setDesignationType(request.designationType());
         resource.setActive(request.active());
         resource.setProjectId(request.projectId());
         return toResponse(resource);
     }
 
-    private MasterResource findOrThrow(String resId) {
-        return repository.findById(resId)
+    private MasterResource findCurrentOrLatest(String resId) {
+        return repository
+                .findByResIdAndActiveTrue(resId)
+                .or(() -> repository.findFirstByResIdOrderByDateOfJoiningDesc(resId))
                 .orElseThrow(() -> new NotFoundException("No resource with res_id " + resId));
     }
 
@@ -132,13 +204,17 @@ public class MasterResourceService {
 
     private ResourceResponse toResponse(MasterResource r) {
         return new ResourceResponse(
+                r.getId(),
                 r.getResId(),
                 r.getName(),
                 r.getEmailId(),
-                r.getRateCard(),
+                r.getDesignationType(),
+                r.getLocation(),
+                r.getRateCardByYear(),
+                r.getCategory(),
+                r.getCategoryDetails(),
                 r.getDateOfJoining(),
                 r.getLastDate(),
-                r.getDesignationType(),
                 r.isActive(),
                 r.getProjectId());
     }

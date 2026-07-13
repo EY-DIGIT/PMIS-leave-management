@@ -42,10 +42,14 @@ public class MasterResourceController {
      */
     @Operation(
             summary = "Upload the resource master Excel",
-            description = "Upload an .xlsx/.xls file whose first sheet has a header row followed by rows of "
-                    + "[res_id, name, emailId, rate_card, date_of_joining, last_date, designationType, isactive]. "
-                    + "Every resource in the file is assigned to 'projectId'. Each row is upserted by res_id — "
-                    + "re-uploading updates existing resources.")
+            description = "Upload an .xlsx/.xls file whose first sheet has two header rows (group headings, "
+                    + "then column labels) followed by rows of [Attendance ID, Employee Name, Role as per "
+                    + "Contract, Location, Date of Joining, Last Day of Working, Year-1..Year-7 rate card, "
+                    + "Category (RFP/CCN/ASG), CCN/ASG details]. A resource is active when Last Day of Working "
+                    + "is blank. Every resource in the file is assigned to 'projectId'. A row with the same "
+                    + "designation as the resource's current stint updates it in place; a row with a "
+                    + "different designation closes the current stint (its last day becomes the day before "
+                    + "the new row's date of joining) and opens a new one, preserving designation history.")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ResourceUploadResult> upload(
             @Parameter(description = "Project id every resource in this upload belongs to")
@@ -84,18 +88,56 @@ public class MasterResourceController {
                 resId, name, emailId, designationType, projectId, active, joinedFrom, joinedTo);
     }
 
-    /** Get a single resource by res_id. GET /api/resources/{resId} */
-    @Operation(summary = "Get a single resource", description = "Returns 404 if not found.")
+    /**
+     * Get the distinct rate card years configured (no amounts) across a project's active resources.
+     * GET /api/resources/rate-cards?projectId=P1
+     */
+    @Operation(
+            summary = "Get rate card years by project",
+            description = "Returns the distinct rate-card years configured (e.g. [\"Year-1\", \"Year-2\", "
+                    + "...]) across every currently active resource assigned to 'projectId' — one flat list, "
+                    + "no amounts, not broken out per resource. Empty list if the project has no active "
+                    + "resources.")
+    @GetMapping("/rate-cards")
+    public List<String> rateCards(
+            @Parameter(description = "Project id to list rate card years for") @RequestParam("projectId")
+                    String projectId) {
+        return masterResourceService.getRateCardsByProject(projectId);
+    }
+
+    /**
+     * Get a resource's current stint (falls back to its most recent stint if none is active).
+     * GET /api/resources/{resId}
+     */
+    @Operation(
+            summary = "Get a resource's current details",
+            description = "Returns the resource's active employment stint, or its most recent stint if none "
+                    + "is currently active. Returns 404 if the res_id has no stints at all.")
     @GetMapping("/{resId}")
     public ResourceResponse get(@PathVariable String resId) {
         return masterResourceService.getResource(resId);
     }
 
-    /** Update a resource. PUT /api/resources/{resId} */
+    /**
+     * Get every historical stint (designation/employment history) for a resource.
+     * GET /api/resources/{resId}/history
+     */
     @Operation(
-            summary = "Update a resource",
-            description = "Updates name, emailId, rateCard, dateOfJoining, lastDate, designationType and active. "
-                    + "Returns 404 if the res_id doesn't exist.")
+            summary = "Get a resource's full designation/employment history",
+            description = "Returns every stint for this res_id, oldest first — one entry per designation "
+                    + "change or resignation/rejoin. Empty list if the res_id is unknown.")
+    @GetMapping("/{resId}/history")
+    public List<ResourceResponse> history(@PathVariable String resId) {
+        return masterResourceService.getHistory(resId);
+    }
+
+    /** Update a resource's current stint in place. PUT /api/resources/{resId} */
+    @Operation(
+            summary = "Update a resource's current stint",
+            description = "Updates the resource's currently active stint in place (name, emailId, rate card, "
+                    + "dates, designation, category, active, project). Does not trigger designation-history "
+                    + "logic — use the Excel upload for designation changes/resignation/rejoin. Returns 404 "
+                    + "if the res_id has no active stint.")
     @PutMapping("/{resId}")
     public ResourceResponse update(@PathVariable String resId, @Valid @RequestBody ResourceUpdateRequest request) {
         return masterResourceService.updateResource(resId, request);
