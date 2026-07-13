@@ -4,8 +4,6 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
-import io.swagger.v3.oas.models.servers.Server;
-import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -33,7 +31,9 @@ public class OpenApiConfig {
                                 + "working days computed by excluding weekends and public holidays.")
                         .version("0.0.1-SNAPSHOT")
                         .contact(new Contact().name("Leave Management"))
-                        .license(new License().name("Apache 2.0")))
-                .servers(List.of(new Server().url("http://localhost:8080").description("Local")));
+                        .license(new License().name("Apache 2.0")));
+        // No explicit servers list — springdoc/Swagger UI then default "Try it out" requests to
+        // whatever host the docs were loaded from, which is correct in every environment
+        // (local, staging, prod) instead of always pointing at localhost.
     }
 }
