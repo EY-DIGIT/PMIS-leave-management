@@ -11,8 +11,9 @@ import org.springframework.context.annotation.Configuration;
 public class SecurityFilterConfig {
 
     /**
-     * Temporarily disabled (default off) — flip {@code auth.enabled=true} to re-enable the
-     * introspect-token check on every /api/** request.
+     * Enabled by default ({@code auth.enabled=true} in application.properties) — every /api/**
+     * request must carry a valid bearer token, checked against the users-service introspect
+     * endpoint. Flip to {@code false} to disable for local/dev testing.
      */
     @Bean
     public FilterRegistrationBean<TokenAuthenticationFilter> tokenAuthenticationFilter(
