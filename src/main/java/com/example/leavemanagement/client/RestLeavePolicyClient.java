@@ -1,23 +1,31 @@
 package com.example.leavemanagement.client;
 
 import com.example.leavemanagement.dto.LeavePolicyResponse;
+import com.example.leavemanagement.dto.ProjectApiResponse;
+import com.example.leavemanagement.security.CurrentUserContext;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
-/** Set {@code leave-policy-service.mock=false} once the real leave-policy service is available. */
+/**
+ * Fetches a project's leave policy from the real projects service: {@code GET
+ * {base-url}/api/v3/projects/{projectId}}, taking the {@code leaveConfig} block of the response.
+ * Set {@code leave-policy-service.mock=true} to fall back to {@link StubLeavePolicyClient} (e.g.
+ * for offline dev).
+ */
 @Component
-@ConditionalOnProperty(name = "leave-policy-service.mock", havingValue = "false")
+@ConditionalOnProperty(name = "leave-policy-service.mock", havingValue = "false", matchIfMissing = true)
 public class RestLeavePolicyClient implements LeavePolicyClient {
 
     private final RestClient restClient;
     private final String baseUrl;
 
     public RestLeavePolicyClient(
-            RestClient.Builder restClientBuilder, @Value("${leave-policy-service.base-url}") String baseUrl) {
+            RestClient.Builder restClientBuilder, @Value("${projects-service.base-url}") String baseUrl) {
         this.restClient = restClientBuilder.build();
         this.baseUrl = baseUrl;
     }
@@ -25,14 +33,25 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
     @Override
     public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
         try {
-            LeavePolicyResponse response = restClient
+            ProjectApiResponse response = restClient
                     .get()
-                    .uri(baseUrl + "/leave-policy/{projectId}", projectId)
+                    .uri(baseUrl + "/api/v3/projects/{projectId}", projectId)
+                    .headers(this::propagateCallerToken)
                     .retrieve()
-                    .body(LeavePolicyResponse.class);
-            return Optional.ofNullable(response);
+                    .body(ProjectApiResponse.class);
+            return Optional.ofNullable(response)
+                    .map(ProjectApiResponse::data)
+                    .map(ProjectApiResponse.ProjectData::leaveConfig);
         } catch (RestClientException e) {
             return Optional.empty();
+        }
+    }
+
+    /** Forwards the current request's bearer token — the projects service requires one. */
+    private void propagateCallerToken(HttpHeaders headers) {
+        String token = CurrentUserContext.getToken();
+        if (token != null && !token.isBlank()) {
+            headers.setBearerAuth(token);
         }
     }
 }

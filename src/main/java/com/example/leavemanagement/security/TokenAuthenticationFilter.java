@@ -58,7 +58,7 @@ public class TokenAuthenticationFilter extends OncePerRequestFilter {
         }
 
         IntrospectResult user = result.get();
-        CurrentUserContext.set(new CurrentUser(user.userId(), user.email(), user.username()));
+        CurrentUserContext.set(new CurrentUser(user.userId(), user.email(), user.username()), token);
         try {
             filterChain.doFilter(request, response);
         } finally {

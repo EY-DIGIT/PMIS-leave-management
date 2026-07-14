@@ -107,7 +107,7 @@ public class AttendanceQueryService {
         Map<String, LeavePolicyResponse> leavePolicies =
                 validateResourcesAndFetchLeavePolicies(attendanceIds(parsed), projectId);
 
-        int[] thresholds = resolveThresholds(projectId);
+        int[] thresholds = resolveThresholds(projectId, leavePolicies.get(projectId));
         Set<LocalDate> holidays = holidaysBetween(startDate, endDate);
 
         int stored = 0;
@@ -149,11 +149,38 @@ public class AttendanceQueryService {
         }
     }
 
-    private int[] resolveThresholds(String projectId) {
+    /**
+     * Full/half-day minute thresholds: prefers the real leave policy's {@code fullDay}/{@code
+     * halfDay} (hours), falls back to the (largely unmaintained) {@link ProjectConfig} table, then
+     * to an 8h/4h default.
+     */
+    private int[] resolveThresholds(String projectId, LeavePolicyResponse leavePolicy) {
+        if (leavePolicy != null && leavePolicy.fullDay() != null && leavePolicy.halfDay() != null) {
+            return new int[] {leavePolicy.fullDay() * 60, leavePolicy.halfDay() * 60};
+        }
         return projectConfigRepository
                 .findById(projectId)
                 .map(c -> new int[] {c.getFullDayMinutes(), c.getHalfDayMinutes()})
                 .orElse(new int[] {DEFAULT_FULL_DAY_MINUTES, DEFAULT_HALF_DAY_MINUTES});
+    }
+
+    /**
+     * Paid-leave allowance per settlement period: prefers the real leave policy's {@code
+     * leavesPerFrequencyCount}, falls back to {@link ProjectConfig}, then to {@link
+     * QuarterLeavePolicy#MAX_PERMISSIBLE_LEAVE}.
+     */
+    private int resolveMaxLeaves(String projectId) {
+        Integer fromPolicy = leavePolicyClient
+                .getLeavePolicy(projectId)
+                .map(LeavePolicyResponse::leavesPerFrequencyCount)
+                .orElse(null);
+        if (fromPolicy != null) {
+            return fromPolicy;
+        }
+        return projectConfigRepository
+                .findById(projectId)
+                .map(ProjectConfig::getMaxLeavesPerPeriod)
+                .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
     }
 
     private boolean isWeekend(LocalDate date) {
@@ -418,10 +445,7 @@ public class AttendanceQueryService {
                     .map(ProjectResource::getAssignmentStartDate)
                     .orElse(resource.getDateOfJoining());
 
-            int maxLeaves = projectConfigRepository
-                    .findById(resourceProjectId)
-                    .map(ProjectConfig::getMaxLeavesPerPeriod)
-                    .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
+            int maxLeaves = resolveMaxLeaves(resourceProjectId);
 
             QuarterLeaveCalculation calculation =
                     policy.compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves);

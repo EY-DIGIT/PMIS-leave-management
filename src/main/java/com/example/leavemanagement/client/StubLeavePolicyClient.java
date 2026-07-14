@@ -7,17 +7,15 @@ import org.springframework.stereotype.Component;
 
 /**
  * Local leave-policy client: returns the same sample policy for every project, with no external
- * API call. Active by default (the real leave-policy service isn't available yet).
- *
- * <p>Once the real service is up, set {@code leave-policy-service.mock=false} to switch to
- * {@link RestLeavePolicyClient} — no other code changes needed.
+ * API call. Only active when {@code leave-policy-service.mock=true} is set explicitly (e.g. for
+ * offline dev/tests) — {@link RestLeavePolicyClient} (the real projects service) is the default.
  */
 @Component
-@ConditionalOnProperty(name = "leave-policy-service.mock", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "leave-policy-service.mock", havingValue = "true")
 public class StubLeavePolicyClient implements LeavePolicyClient {
 
     private static final LeavePolicyResponse SAMPLE_POLICY =
-            new LeavePolicyResponse("MONTHLY", 4.0, 8.0, true);
+            new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true);
 
     @Override
     public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {

@@ -1,6 +1,8 @@
 package com.example.leavemanagement.service;
 
+import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
+import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.LeaveReportEntry;
 import com.example.leavemanagement.dto.LeaveReportSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
@@ -37,6 +39,7 @@ public class LeaveReportService {
     private final AttendanceRepository attendanceRepository;
     private final PublicHolidayRepository publicHolidayRepository;
     private final QuarterLeavePolicy policy;
+    private final LeavePolicyClient leavePolicyClient;
 
     public LeaveReportService(
             AttendanceQueryService attendanceQueryService,
@@ -45,7 +48,8 @@ public class LeaveReportService {
             ProjectConfigRepository projectConfigRepository,
             AttendanceRepository attendanceRepository,
             PublicHolidayRepository publicHolidayRepository,
-            QuarterLeavePolicy policy) {
+            QuarterLeavePolicy policy,
+            LeavePolicyClient leavePolicyClient) {
         this.attendanceQueryService = attendanceQueryService;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
@@ -53,6 +57,7 @@ public class LeaveReportService {
         this.attendanceRepository = attendanceRepository;
         this.publicHolidayRepository = publicHolidayRepository;
         this.policy = policy;
+        this.leavePolicyClient = leavePolicyClient;
     }
 
     /** The resource's active project assignment, resolved by attendanceId (res_id). */
@@ -141,9 +146,13 @@ public class LeaveReportService {
                 .filter(name -> name != null && !name.isBlank())
                 .orElse(attendanceId);
 
-        int maxLeaves = config != null
-                ? config.getMaxLeavesPerPeriod()
-                : QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE;
+        Integer maxLeavesFromPolicy = Optional.ofNullable(projectId)
+                .flatMap(leavePolicyClient::getLeavePolicy)
+                .map(LeavePolicyResponse::leavesPerFrequencyCount)
+                .orElse(null);
+        int maxLeaves = maxLeavesFromPolicy != null
+                ? maxLeavesFromPolicy
+                : config != null ? config.getMaxLeavesPerPeriod() : QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE;
 
         QuarterLeaveCalculation calc =
                 policy.compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves);
