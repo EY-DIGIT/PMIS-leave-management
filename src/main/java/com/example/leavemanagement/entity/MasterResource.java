@@ -5,29 +5,28 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.Index;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import java.time.LocalDate;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 /**
- * One employment stint of a workforce resource, upserted from the resource master Excel upload.
+ * Permanent identity/employee data for one workforce resource. {@code resId} (the Attendance ID
+ * assigned by the client) is the unique business key — never name or role, both of which can
+ * change or repeat across different people.
  *
- * <p>A resource ({@code resId}) can have several rows over time — one per designation/period, so
- * a designation change or resignation-then-rejoin is recorded as history rather than overwriting
- * the prior stint. At most one row per {@code resId} should have {@code active = true} at a time;
- * that row is "the current resource" as far as the rest of the app (attendance validation, get,
- * update) is concerned. {@code dateOfJoining}/{@code lastDate} are this stint's effective date
- * range.
+ * <p>Project/role/rate-card are <b>not</b> stored here — they are time-varying facts about a
+ * resource's relationship to a project, tracked as history in {@link ProjectResource}.
  */
 @Entity
-@Table(name = "master_resource", indexes = @Index(name = "idx_master_resource_res_id", columnList = "res_id"))
+@Table(
+        name = "master_resource",
+        uniqueConstraints = @UniqueConstraint(name = "uk_master_resource_res_id", columnNames = "res_id"))
 @Getter
 @Setter
 public class MasterResource {
@@ -47,16 +46,8 @@ public class MasterResource {
     @Column(name = "email_id", length = 200)
     private String emailId;
 
-    @Column(name = "role", length = 200)
-    private String designationType;
-
     @Column(name = "location", length = 100)
     private String location;
-
-    /** Year-1..Year-7 rate card, e.g. {"Year-1": 100874.0, "Year-2": 107594.0, ...}. */
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "rate_card_by_year")
-    private Map<String, Double> rateCardByYear = new LinkedHashMap<>();
 
     @Column(name = "category", length = 20)
     private String category;
@@ -70,11 +61,11 @@ public class MasterResource {
     @Column(name = "last_date")
     private LocalDate lastDate;
 
-    @Column(name = "project_id", length = 50)
-    private String projectId;
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
 
-    @Column(name = "is_active", nullable = false)
-    private boolean active;
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
 
     protected MasterResource() {
         // for JPA
@@ -82,5 +73,16 @@ public class MasterResource {
 
     public MasterResource(String resId) {
         this.resId = resId;
+    }
+
+    @PrePersist
+    void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = createdAt;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        updatedAt = LocalDateTime.now();
     }
 }

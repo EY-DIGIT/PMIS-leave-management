@@ -6,18 +6,20 @@ import com.example.leavemanagement.dto.LeaveReportSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.ResourceQuarterSettlement;
+import com.example.leavemanagement.entity.Attendance;
+import com.example.leavemanagement.entity.AttendanceStatus;
+import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectConfig;
+import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.entity.PublicHoliday;
-import com.example.leavemanagement.entity.ResourceMonthlyAttendance;
-import com.example.leavemanagement.entity.ResourceProjectMapping;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
+import com.example.leavemanagement.repository.AttendanceRepository;
+import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
+import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
-import com.example.leavemanagement.repository.ResourceMonthlyAttendanceRepository;
-import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
 import java.time.LocalDate;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -29,25 +31,35 @@ import org.springframework.transaction.annotation.Transactional;
 public class LeaveReportService {
 
     private final AttendanceQueryService attendanceQueryService;
-    private final ResourceProjectMappingRepository resourceProjectMappingRepository;
+    private final MasterResourceRepository masterResourceRepository;
+    private final ProjectResourceRepository projectResourceRepository;
     private final ProjectConfigRepository projectConfigRepository;
-    private final ResourceMonthlyAttendanceRepository resourceMonthlyAttendanceRepository;
+    private final AttendanceRepository attendanceRepository;
     private final PublicHolidayRepository publicHolidayRepository;
     private final QuarterLeavePolicy policy;
 
     public LeaveReportService(
             AttendanceQueryService attendanceQueryService,
-            ResourceProjectMappingRepository resourceProjectMappingRepository,
+            MasterResourceRepository masterResourceRepository,
+            ProjectResourceRepository projectResourceRepository,
             ProjectConfigRepository projectConfigRepository,
-            ResourceMonthlyAttendanceRepository resourceMonthlyAttendanceRepository,
+            AttendanceRepository attendanceRepository,
             PublicHolidayRepository publicHolidayRepository,
             QuarterLeavePolicy policy) {
         this.attendanceQueryService = attendanceQueryService;
-        this.resourceProjectMappingRepository = resourceProjectMappingRepository;
+        this.masterResourceRepository = masterResourceRepository;
+        this.projectResourceRepository = projectResourceRepository;
         this.projectConfigRepository = projectConfigRepository;
-        this.resourceMonthlyAttendanceRepository = resourceMonthlyAttendanceRepository;
+        this.attendanceRepository = attendanceRepository;
         this.publicHolidayRepository = publicHolidayRepository;
         this.policy = policy;
+    }
+
+    /** The resource's active project assignment, resolved by attendanceId (res_id). */
+    private Optional<ProjectResource> activeAssignment(String attendanceId) {
+        return masterResourceRepository
+                .findByResId(attendanceId)
+                .flatMap(resource -> projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()));
     }
 
     @Transactional(readOnly = true)
@@ -56,9 +68,8 @@ public class LeaveReportService {
 
         List<LeaveReportEntry> entries = report.resources().stream()
                 .map(settlement -> {
-                    String resourceProjectId = resourceProjectMappingRepository
-                            .findById(settlement.attendanceId())
-                            .map(ResourceProjectMapping::getProjectId)
+                    String resourceProjectId = activeAssignment(settlement.attendanceId())
+                            .map(ProjectResource::getProjectId)
                             .orElse(null);
                     QuarterLeaveCalculation calc = settlement.calculation();
                     return new LeaveReportEntry(
@@ -95,24 +106,15 @@ public class LeaveReportService {
         LocalDate quarterEnd = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
 
-        List<ResourceMonthlyAttendance> rows =
-                resourceMonthlyAttendanceRepository.findByYearAndMonthIn(year, months).stream()
-                        .filter(r -> attendanceId.equals(r.getAttendanceId()))
-                        .toList();
-
-        Set<LocalDate> absentDates = new HashSet<>();
-        String sheetName = attendanceId;
-        for (ResourceMonthlyAttendance row : rows) {
-            if (row.getEmployeeName() != null && !row.getEmployeeName().isBlank()) {
-                sheetName = row.getEmployeeName();
-            }
-            int lengthOfMonth = LocalDate.of(year, row.getMonth(), 1).lengthOfMonth();
-            for (Integer day : row.getAbsentDays()) {
-                if (day >= 1 && day <= lengthOfMonth) {
-                    absentDates.add(LocalDate.of(year, row.getMonth(), day));
-                }
-            }
-        }
+        Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
+        Set<LocalDate> absentDates = resource
+                .map(r -> attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        r.getId(), quarterStart, quarterEnd))
+                .orElse(List.of())
+                .stream()
+                .filter(a -> a.getStatus() == AttendanceStatus.A)
+                .map(Attendance::getAttendanceDate)
+                .collect(Collectors.toSet());
 
         Set<LocalDate> holidays =
                 publicHolidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(quarterStart, quarterEnd)
@@ -120,10 +122,11 @@ public class LeaveReportService {
                         .map(PublicHoliday::getHolidayDate)
                         .collect(Collectors.toSet());
 
-        ResourceProjectMapping mapping =
-                resourceProjectMappingRepository.findById(attendanceId).orElse(null);
+        ProjectResource assignment = resource
+                .flatMap(r -> projectResourceRepository.findByResourceIdAndActiveTrue(r.getId()))
+                .orElse(null);
 
-        String projectId = mapping != null ? mapping.getProjectId() : null;
+        String projectId = assignment != null ? assignment.getProjectId() : null;
         if (filterProjectId != null && !filterProjectId.isBlank() && !filterProjectId.equals(projectId)) {
             throw new NotFoundException(
                     "No leave record for attendanceId " + attendanceId + " under project " + filterProjectId);
@@ -133,11 +136,10 @@ public class LeaveReportService {
                 .orElse(null);
         String projectName = config != null ? config.getProjectName() : null;
 
-        LocalDate joiningDate = mapping != null ? mapping.getJoiningDate() : null;
-        String employeeName = (mapping != null && mapping.getEmployeeName() != null
-                && !mapping.getEmployeeName().isBlank())
-                ? mapping.getEmployeeName()
-                : sheetName;
+        LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
+        String employeeName = resource.map(MasterResource::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .orElse(attendanceId);
 
         int maxLeaves = config != null
                 ? config.getMaxLeavesPerPeriod()

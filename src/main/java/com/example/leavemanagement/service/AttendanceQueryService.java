@@ -1,40 +1,38 @@
 package com.example.leavemanagement.service;
 
-import com.example.leavemanagement.client.EmployeeDirectoryClient;
-import com.example.leavemanagement.client.EmployeeInfo;
 import com.example.leavemanagement.client.LeavePolicyClient;
-import com.example.leavemanagement.dto.AttendanceSummaryReport;
-import com.example.leavemanagement.dto.EmployeeAttendance;
+import com.example.leavemanagement.dto.AttendanceReportSummary;
+import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
-import com.example.leavemanagement.dto.MonthlyAttendanceStored;
-import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.ResourceQuarterSettlement;
+import com.example.leavemanagement.entity.Attendance;
+import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectConfig;
+import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.entity.PublicHoliday;
-import com.example.leavemanagement.entity.ResourceMonthlyAttendance;
-import com.example.leavemanagement.entity.ResourceProjectMapping;
 import com.example.leavemanagement.exception.AttendanceValidationException;
 import com.example.leavemanagement.exception.BadRequestException;
+import com.example.leavemanagement.exception.NotFoundException;
+import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
+import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
-import com.example.leavemanagement.repository.ResourceMonthlyAttendanceRepository;
-import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
-import java.util.Optional;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -42,80 +40,99 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Persists monthly attendance and answers questions over the stored data:
- * a monthly summary (weekends/holidays/leaves/short-hour days) and the quarterly
+ * Persists attendance (one row per resource per working day) and answers questions over it: the
+ * report dashboards (monthly/employee/quarterly/yearly) and the payroll-grade quarterly
  * leave-policy settlement (UIDAI 5.24.1).
+ *
+ * <p>Weekends and public holidays are never persisted per resource — they're the same for
+ * everyone on a given day, so they're derived at report time from the day-of-week and {@link
+ * PublicHoliday} instead of being duplicated into every resource's row set.
  */
 @Service
 public class AttendanceQueryService {
 
+    private static final DateTimeFormatter MONTH_YEAR = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
+    private static final int DEFAULT_FULL_DAY_MINUTES = 8 * 60;
+    private static final int DEFAULT_HALF_DAY_MINUTES = 4 * 60;
+
     private final AttendanceExcelParser parser;
-    private final ResourceMonthlyAttendanceRepository attendanceRepository;
+    private final AttendanceRepository attendanceRepository;
     private final PublicHolidayRepository holidayRepository;
-    private final EmployeeDirectoryClient directory;
     private final QuarterLeavePolicy policy;
-    private final AttendanceLeaveService attendanceLeaveService;
-    private final ResourceProjectMappingRepository resourceProjectMappingRepository;
-    private final ProjectConfigRepository projectConfigRepository;
     private final MasterResourceRepository masterResourceRepository;
+    private final ProjectResourceRepository projectResourceRepository;
+    private final ProjectConfigRepository projectConfigRepository;
     private final LeavePolicyClient leavePolicyClient;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
-            ResourceMonthlyAttendanceRepository attendanceRepository,
+            AttendanceRepository attendanceRepository,
             PublicHolidayRepository holidayRepository,
-            EmployeeDirectoryClient directory,
             QuarterLeavePolicy policy,
-            AttendanceLeaveService attendanceLeaveService,
-            ResourceProjectMappingRepository resourceProjectMappingRepository,
-            ProjectConfigRepository projectConfigRepository,
             MasterResourceRepository masterResourceRepository,
+            ProjectResourceRepository projectResourceRepository,
+            ProjectConfigRepository projectConfigRepository,
             LeavePolicyClient leavePolicyClient) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
-        this.directory = directory;
         this.policy = policy;
-        this.attendanceLeaveService = attendanceLeaveService;
-        this.resourceProjectMappingRepository = resourceProjectMappingRepository;
-        this.projectConfigRepository = projectConfigRepository;
         this.masterResourceRepository = masterResourceRepository;
+        this.projectResourceRepository = projectResourceRepository;
+        this.projectConfigRepository = projectConfigRepository;
         this.leavePolicyClient = leavePolicyClient;
     }
 
+    // ------------------------------------------------------------------
+    // Upload
+    // ------------------------------------------------------------------
+
     /**
-     * Parses and upserts an attendance sheet for the given Attendance Start Date / Attendance
-     * End Date period. Only absent weekdays are kept; worked minutes per day are stored for the
-     * short-hours calculation. A period spanning more than one calendar month is split and
-     * stored as one row-set per covered month; re-uploading a month overwrites it.
+     * Parses an attendance sheet for the given Attendance Start Date / Attendance End Date period
+     * and replaces each uploaded resource's rows in that range. Weekday, non-holiday days are
+     * classified P/HD (worked, per the project's full/half-day minute thresholds) or A (no punch
+     * data — there's no leave-request source yet, so an unexplained absence is Absent, not Leave).
+     * Weekends and public holidays are not persisted — see the class doc.
      */
     @Transactional
-    public MonthlyAttendanceStored storeMonthly(
-            String milestoneId, String projectId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
+    public AttendanceUploadResult upload(
+            String projectId,
+            String milestoneId,
+            LocalDate startDate,
+            LocalDate endDate,
+            String rateYear,
+            MultipartFile file) {
         validatePeriod(startDate, endDate);
         List<EmployeeAttendanceByDate> parsed = parser.parse(file, startDate, endDate);
         Map<String, LeavePolicyResponse> leavePolicies =
                 validateResourcesAndFetchLeavePolicies(attendanceIds(parsed), projectId);
-        List<MonthlyAttendanceStored.MonthCount> months = persist(startDate, endDate, milestoneId, projectId, parsed);
-        return new MonthlyAttendanceStored(startDate, endDate, months, leavePolicies);
-    }
 
-    /**
-     * Stores the period's attendance and returns one summary per covered calendar month — used
-     * by the upload endpoint so the data is immediately available to the GET summary and the
-     * quarterly settlement.
-     */
-    @Transactional
-    public List<MonthlyAttendanceSummary> storeAndSummarize(
-            String milestoneId, String projectId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
-        validatePeriod(startDate, endDate);
-        List<EmployeeAttendanceByDate> parsed = parser.parse(file, startDate, endDate);
-        validateResourcesAndFetchLeavePolicies(attendanceIds(parsed), projectId);
-        persist(startDate, endDate, milestoneId, projectId, parsed);
-        return coveredYearMonths(startDate, endDate).stream()
-                .map(ym -> attendanceLeaveService.buildSummary(
-                        ym.getYear(), ym.getMonthValue(), forMonth(parsed, ym)))
-                .toList();
+        int[] thresholds = resolveThresholds(projectId);
+        Set<LocalDate> holidays = holidaysBetween(startDate, endDate);
+
+        int stored = 0;
+        for (EmployeeAttendanceByDate employee : parsed) {
+            MasterResource resource = masterResourceRepository.findByResId(employee.attendanceId()).orElseThrow();
+            attendanceRepository.deleteByResourceIdAndAttendanceDateBetween(resource.getId(), startDate, endDate);
+            for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+                if (isWeekend(date) || holidays.contains(date)) {
+                    continue; // derived at report time, not persisted
+                }
+                Integer workedMinutes = employee.workedMinutesByDate().get(date);
+                Attendance row;
+                if (workedMinutes != null && workedMinutes > 0) {
+                    AttendanceStatus status = workedMinutes >= thresholds[0] ? AttendanceStatus.P : AttendanceStatus.HD;
+                    row = new Attendance(resource, projectId, milestoneId, date, status);
+                    row.setWorkingHours(Math.round(workedMinutes / 60.0 * 100) / 100.0);
+                } else {
+                    row = new Attendance(resource, projectId, milestoneId, date, AttendanceStatus.A);
+                }
+                attendanceRepository.save(row);
+            }
+            stored++;
+        }
+        applyRateYear(parsed, projectId, rateYear);
+        return new AttendanceUploadResult(startDate, endDate, parsed.size(), stored, leavePolicies);
     }
 
     private List<String> attendanceIds(List<EmployeeAttendanceByDate> parsed) {
@@ -132,37 +149,22 @@ public class AttendanceQueryService {
         }
     }
 
-    /** Every calendar month touched by [startDate, endDate], ascending. */
-    private List<YearMonth> coveredYearMonths(LocalDate startDate, LocalDate endDate) {
-        List<YearMonth> months = new ArrayList<>();
-        YearMonth cursor = YearMonth.from(startDate);
-        YearMonth end = YearMonth.from(endDate);
-        while (!cursor.isAfter(end)) {
-            months.add(cursor);
-            cursor = cursor.plusMonths(1);
-        }
-        return months;
+    private int[] resolveThresholds(String projectId) {
+        return projectConfigRepository
+                .findById(projectId)
+                .map(c -> new int[] {c.getFullDayMinutes(), c.getHalfDayMinutes()})
+                .orElse(new int[] {DEFAULT_FULL_DAY_MINUTES, DEFAULT_HALF_DAY_MINUTES});
     }
 
-    /** Restricts the date-keyed parsed rows to one calendar month, in the legacy day-of-month shape. */
-    private List<EmployeeAttendance> forMonth(List<EmployeeAttendanceByDate> parsed, YearMonth yearMonth) {
-        List<EmployeeAttendance> result = new ArrayList<>();
-        for (EmployeeAttendanceByDate employee : parsed) {
-            Set<Integer> absentDays = employee.absentDates().stream()
-                    .filter(date -> YearMonth.from(date).equals(yearMonth))
-                    .map(LocalDate::getDayOfMonth)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            Map<Integer, Integer> workedMinutesByDay = new LinkedHashMap<>();
-            employee.workedMinutesByDate().forEach((date, minutes) -> {
-                if (YearMonth.from(date).equals(yearMonth)) {
-                    workedMinutesByDay.put(date.getDayOfMonth(), minutes);
-                }
-            });
-            result.add(new EmployeeAttendance(
-                    employee.attendanceId(), employee.employeeName(), employee.designation(), absentDays,
-                    workedMinutesByDay));
-        }
-        return result;
+    private boolean isWeekend(LocalDate date) {
+        DayOfWeek dow = date.getDayOfWeek();
+        return dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY;
+    }
+
+    private Set<LocalDate> holidaysBetween(LocalDate start, LocalDate end) {
+        return holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(start, end).stream()
+                .map(PublicHoliday::getHolidayDate)
+                .collect(Collectors.toSet());
     }
 
     /**
@@ -177,20 +179,18 @@ public class AttendanceQueryService {
         List<String> errors = new ArrayList<>();
 
         for (String attendanceId : attendanceIds) {
-            Optional<MasterResource> resource = masterResourceRepository.findByResIdAndActiveTrue(attendanceId);
+            Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
             if (resource.isEmpty()) {
-                if (masterResourceRepository.existsByResId(attendanceId)) {
-                    errors.add("Resource " + attendanceId + " is inactive.");
-                } else {
-                    errors.add("Resource " + attendanceId + " does not exist.");
-                }
+                errors.add("Resource " + attendanceId + " does not exist.");
                 continue;
             }
-            String actualProjectId = resource.get().getProjectId();
-            if (actualProjectId == null || actualProjectId.isBlank()) {
-                errors.add("Resource " + attendanceId + " has no project id configured.");
+            Optional<ProjectResource> assignment =
+                    projectResourceRepository.findByResourceIdAndActiveTrue(resource.get().getId());
+            if (assignment.isEmpty()) {
+                errors.add("Resource " + attendanceId + " is inactive.");
                 continue;
             }
+            String actualProjectId = assignment.get().getProjectId();
             if (!actualProjectId.equals(projectId)) {
                 errors.add("Resource " + attendanceId + " belongs to project " + actualProjectId
                         + ", not " + projectId + ".");
@@ -213,143 +213,170 @@ public class AttendanceQueryService {
     }
 
     /**
-     * Splits the period into its covered calendar months and, for each, replaces that month's
-     * stored rows with the freshly parsed set (handles repeated/masked ids).
+     * Applies the upload's Rate_Year (e.g. "Year-1") to every uploaded resource's active
+     * assignment on this project. A blank/absent rateYear leaves assignments untouched — it
+     * doesn't have to be given on every upload.
      */
-    private List<MonthlyAttendanceStored.MonthCount> persist(
-            LocalDate startDate,
-            LocalDate endDate,
-            String milestoneId,
-            String projectId,
-            List<EmployeeAttendanceByDate> parsed) {
-        List<MonthlyAttendanceStored.MonthCount> counts = new ArrayList<>();
-        for (YearMonth yearMonth : coveredYearMonths(startDate, endDate)) {
-            int year = yearMonth.getYear();
-            int month = yearMonth.getMonthValue();
-            List<ResourceMonthlyAttendance> existing = attendanceRepository.findByYearAndMonth(year, month);
-            if (!existing.isEmpty()) {
-                attendanceRepository.deleteAll(existing);
-                attendanceRepository.flush(); // apply deletes before inserting the replacements
-            }
-            LocalDate asOfDate = LocalDate.of(year, month, 1);
-            int stored = 0;
-            for (EmployeeAttendance employee : forMonth(parsed, yearMonth)) {
-                ResourceMonthlyAttendance row = new ResourceMonthlyAttendance(
-                        employee.attendanceId(),
-                        employee.employeeName(),
-                        resolveDesignation(employee, asOfDate),
-                        milestoneId,
-                        projectId,
-                        year,
-                        month);
-                row.setAbsentDays(absentWeekdays(year, month, employee.absentDays()));
-                row.setWorkedMinutesByDay(new LinkedHashMap<>(employee.workedMinutesByDay()));
-                attendanceRepository.save(row);
-                stored++;
-            }
-            counts.add(new MonthlyAttendanceStored.MonthCount(year, month, stored));
+    private void applyRateYear(List<EmployeeAttendanceByDate> parsed, String projectId, String rateYear) {
+        if (rateYear == null || rateYear.isBlank()) {
+            return;
         }
-        return counts;
+        for (EmployeeAttendanceByDate employee : parsed) {
+            projectResourceRepository
+                    .findByResource_ResIdAndProjectIdAndActiveTrue(employee.attendanceId(), projectId)
+                    .ifPresent(assignment -> {
+                        assignment.setRateYear(rateYear);
+                        projectResourceRepository.save(assignment);
+                    });
+        }
     }
 
-    /**
-     * The resource's designation as of the 1st of the attendance month, per the master resource's
-     * history (a resource can have multiple designations over time). Falls back to the attendance
-     * sheet's own designation column when no history row covers that date (e.g. a resource that
-     * joined mid-month, before its first full month is uploaded).
-     */
-    private String resolveDesignation(EmployeeAttendance employee, LocalDate asOfDate) {
-        return masterResourceRepository
-                .findEffectiveOn(employee.attendanceId(), asOfDate)
-                .map(MasterResource::getDesignationType)
-                .filter(designation -> designation != null && !designation.isBlank())
-                .orElseGet(employee::designation);
-    }
+    // ------------------------------------------------------------------
+    // Reports
+    // ------------------------------------------------------------------
 
-    /**
-     * Summary from stored attendance (no file upload). Returns a flat
-     * {@link MonthlyAttendanceSummary} for a single month ({@code month}=1-12), or an
-     * {@link AttendanceSummaryReport} (one summary per stored month) for
-     * {@code month}=null/blank/"all".
-     */
+    /** Dashboard: one summary per resource currently active on the project, for one month. */
     @Transactional(readOnly = true)
-    public Object summary(int year, String month, String projectId) {
-        Integer monthValue = parseMonthParam(month);
-        return monthValue != null ? monthlySummary(year, monthValue, projectId) : allMonthsSummary(year, projectId);
-    }
-
-    /** Flat summary for one stored month, optionally restricted to one project. */
-    @Transactional(readOnly = true)
-    public MonthlyAttendanceSummary monthlySummary(int year, int month, String projectId) {
+    public List<AttendanceReportSummary> monthlyReport(String projectId, int year, int month) {
         validateMonthAndYear(year, month);
-        List<ResourceMonthlyAttendance> rows = isBlank(projectId)
-                ? attendanceRepository.findByYearAndMonth(year, month)
-                : attendanceRepository.findByYearAndMonthAndProjectId(year, month, projectId);
-        return summaryFromRows(year, month, rows);
+        LocalDate start = LocalDate.of(year, month, 1);
+        LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
+        return projectDashboard(projectId, start, end, start.format(MONTH_YEAR));
     }
 
-    /** One summary per stored month of the year, sorted ascending, optionally restricted to one project. */
+    /** One resource's summary for one month. */
     @Transactional(readOnly = true)
-    public AttendanceSummaryReport allMonthsSummary(int year, String projectId) {
+    public AttendanceReportSummary employeeReport(String resourceId, int year, int month) {
+        validateMonthAndYear(year, month);
+        LocalDate start = LocalDate.of(year, month, 1);
+        LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
+        return employeeSummary(resourceId, start, end, start.format(MONTH_YEAR));
+    }
+
+    /**
+     * Quarterly report: pass {@code resourceId} for a single resource's summary, or {@code
+     * projectId} for the project dashboard (one summary per active resource).
+     */
+    @Transactional(readOnly = true)
+    public List<AttendanceReportSummary> quarterlyReport(String projectId, String resourceId, int year, int quarter) {
+        if (quarter < 1 || quarter > 4) {
+            throw new BadRequestException("quarter must be between 1 and 4");
+        }
+        List<Integer> months = List.of(quarter * 3 - 2, quarter * 3 - 1, quarter * 3);
+        LocalDate start = LocalDate.of(year, months.get(0), 1);
+        LocalDate end = LocalDate.of(year, months.get(2), 1)
+                .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
+        return scopedReport(projectId, resourceId, start, end, "Q" + quarter + " " + year);
+    }
+
+    /**
+     * Yearly report: pass {@code resourceId} for a single resource's summary, or {@code
+     * projectId} for the project dashboard (one summary per active resource).
+     */
+    @Transactional(readOnly = true)
+    public List<AttendanceReportSummary> yearlyReport(String projectId, String resourceId, int year) {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
-        List<ResourceMonthlyAttendance> yearRows = isBlank(projectId)
-                ? attendanceRepository.findByYear(year)
-                : attendanceRepository.findByYearAndProjectId(year, projectId);
-        Map<Integer, List<ResourceMonthlyAttendance>> byMonth =
-                yearRows.stream().collect(Collectors.groupingBy(ResourceMonthlyAttendance::getMonth));
-        List<MonthlyAttendanceSummary> months = byMonth.keySet().stream()
-                .sorted()
-                .map(m -> summaryFromRows(year, m, byMonth.get(m)))
+        LocalDate start = LocalDate.of(year, 1, 1);
+        LocalDate end = LocalDate.of(year, 12, 31);
+        return scopedReport(projectId, resourceId, start, end, String.valueOf(year));
+    }
+
+    private List<AttendanceReportSummary> scopedReport(
+            String projectId, String resourceId, LocalDate start, LocalDate end, String periodLabel) {
+        if (resourceId != null && !resourceId.isBlank()) {
+            return List.of(employeeSummary(resourceId, start, end, periodLabel));
+        }
+        if (projectId == null || projectId.isBlank()) {
+            throw new BadRequestException("projectId or resourceId is required");
+        }
+        return projectDashboard(projectId, start, end, periodLabel);
+    }
+
+    private List<AttendanceReportSummary> projectDashboard(
+            String projectId, LocalDate start, LocalDate end, String periodLabel) {
+        return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+                .map(ProjectResource::getResource)
+                .map(resource -> buildSummary(resource, projectId, start, end, periodLabel))
                 .toList();
-        return new AttendanceSummaryReport(year, null, months);
     }
 
-    private boolean isBlank(String value) {
-        return value == null || value.isBlank();
+    private AttendanceReportSummary employeeSummary(
+            String resourceId, LocalDate start, LocalDate end, String periodLabel) {
+        MasterResource resource = masterResourceRepository
+                .findByResId(resourceId)
+                .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
+        String projectId = projectResourceRepository
+                .findByResourceIdAndActiveTrue(resource.getId())
+                .map(ProjectResource::getProjectId)
+                .orElse(null);
+        return buildSummary(resource, projectId, start, end, periodLabel);
     }
 
-    private MonthlyAttendanceSummary summaryFromRows(int year, int month, List<ResourceMonthlyAttendance> rows) {
-        List<EmployeeAttendance> attendance = rows.stream()
-                .map(row -> new EmployeeAttendance(
-                        row.getAttendanceId(),
-                        row.getEmployeeName(),
-                        row.getDesignation(),
-                        row.getAbsentDays(),
-                        row.getWorkedMinutesByDay()))
-                .toList();
-        return attendanceLeaveService.buildSummary(year, month, attendance);
-    }
-
-    /** Parses the month parameter: {@code null}/blank/"all" -> null (all months), else 1-12. */
-    private Integer parseMonthParam(String month) {
-        if (month == null || month.isBlank() || month.equalsIgnoreCase("all")) {
-            return null;
+    private AttendanceReportSummary buildSummary(
+            MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel) {
+        int totalDays = (int) (end.toEpochDay() - start.toEpochDay()) + 1;
+        Set<LocalDate> holidays = holidaysBetween(start, end);
+        int weekOffDays = 0;
+        int holidayDays = 0;
+        for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
+            if (isWeekend(date)) {
+                weekOffDays++;
+            } else if (holidays.contains(date)) {
+                holidayDays++;
+            }
         }
-        int value;
-        try {
-            value = Integer.parseInt(month.trim());
-        } catch (NumberFormatException e) {
-            throw new BadRequestException("month must be 1-12 or 'all'");
-        }
-        if (value < 1 || value > 12) {
-            throw new BadRequestException("month must be 1-12 or 'all'");
-        }
-        return value;
+        int workingDays = totalDays - weekOffDays - holidayDays;
+
+        Map<AttendanceStatus, Long> counts =
+                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), start, end).stream()
+                        .collect(Collectors.groupingBy(Attendance::getStatus, Collectors.counting()));
+
+        int presentDays = counts.getOrDefault(AttendanceStatus.P, 0L).intValue();
+        int halfDays = counts.getOrDefault(AttendanceStatus.HD, 0L).intValue();
+        int leaveDays = counts.getOrDefault(AttendanceStatus.L, 0L).intValue();
+        int absentDays = counts.getOrDefault(AttendanceStatus.A, 0L).intValue();
+        int wfhDays = counts.getOrDefault(AttendanceStatus.WFH, 0L).intValue();
+        double attendancePercentage =
+                workingDays > 0 ? Math.round(presentDays * 10000.0 / workingDays) / 100.0 : 0d;
+
+        return new AttendanceReportSummary(
+                resource.getResId(),
+                resource.getName(),
+                projectId,
+                periodLabel,
+                workingDays,
+                presentDays,
+                halfDays,
+                leaveDays,
+                absentDays,
+                weekOffDays,
+                holidayDays,
+                wfhDays,
+                attendancePercentage);
     }
 
-    /**
-     * Applies the quarterly leave policy (UIDAI 5.24.1) across the quarter's stored
-     * attendance, one settlement per resource. Quarters are calendar quarters:
-     * Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec.
-     */
+    private void validateMonthAndYear(int year, int month) {
+        if (month < 1 || month > 12) {
+            throw new BadRequestException("month must be between 1 and 12");
+        }
+        if (year < 1970 || year > 9999) {
+            throw new BadRequestException("year must be between 1970 and 9999");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Payroll: quarterly leave-policy settlement (UIDAI 5.24.1) — preserved separately from the
+    // simple day-count reports above, since paid/unpaid/sandwich-leave charging is payroll-grade
+    // logic, not just a count of status='L' rows.
+    // ------------------------------------------------------------------
+
     @Transactional(readOnly = true)
     public QuarterLeaveReport quarterlySettlement(int year, int quarter) {
         return quarterlySettlement(year, quarter, null);
     }
 
-    /** Same as {@link #quarterlySettlement(int, int)}, optionally restricted to one project. */
     @Transactional(readOnly = true)
     public QuarterLeaveReport quarterlySettlement(int year, int quarter, String projectId) {
         if (quarter < 1 || quarter > 4) {
@@ -364,62 +391,43 @@ public class AttendanceQueryService {
         LocalDate quarterEnd = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
 
-        Set<LocalDate> holidays =
-                holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(quarterStart, quarterEnd).stream()
-                        .map(PublicHoliday::getHolidayDate)
-                        .collect(Collectors.toSet());
+        Set<LocalDate> holidays = holidaysBetween(quarterStart, quarterEnd);
 
-        List<ResourceMonthlyAttendance> rows = isBlank(projectId)
-                ? attendanceRepository.findByYearAndMonthIn(year, months)
-                : attendanceRepository.findByYearAndMonthInAndProjectId(year, months, projectId);
-        Set<Integer> monthsWithData =
-                rows.stream().map(ResourceMonthlyAttendance::getMonth).collect(Collectors.toCollection(HashSet::new));
+        List<Attendance> rows = (projectId == null || projectId.isBlank())
+                ? attendanceRepository.findByAttendanceDateBetween(quarterStart, quarterEnd)
+                : attendanceRepository.findByProjectIdAndAttendanceDateBetween(projectId, quarterStart, quarterEnd);
+        Set<Integer> monthsWithData = rows.stream()
+                .map(a -> a.getAttendanceDate().getMonthValue())
+                .collect(Collectors.toCollection(HashSet::new));
 
-        // Group stored rows by resource.
-        Map<String, List<ResourceMonthlyAttendance>> byResource =
-                rows.stream().collect(Collectors.groupingBy(ResourceMonthlyAttendance::getAttendanceId));
+        Map<Long, List<Attendance>> byResource =
+                rows.stream().collect(Collectors.groupingBy(a -> a.getResource().getId()));
 
         List<ResourceQuarterSettlement> settlements = new ArrayList<>();
-        for (Map.Entry<String, List<ResourceMonthlyAttendance>> entry : byResource.entrySet()) {
-            String attendanceId = entry.getKey();
-            Set<LocalDate> absentDates = new HashSet<>();
-            String sheetName = attendanceId;
-            for (ResourceMonthlyAttendance row : entry.getValue()) {
-                if (row.getEmployeeName() != null && !row.getEmployeeName().isBlank()) {
-                    sheetName = row.getEmployeeName();
-                }
-                int lengthOfMonth = LocalDate.of(year, row.getMonth(), 1).lengthOfMonth();
-                for (Integer day : row.getAbsentDays()) {
-                    if (day >= 1 && day <= lengthOfMonth) {
-                        absentDates.add(LocalDate.of(year, row.getMonth(), day));
-                    }
-                }
-            }
+        for (List<Attendance> resourceRows : byResource.values()) {
+            MasterResource resource = resourceRows.get(0).getResource();
+            String resourceProjectId = resourceRows.get(0).getProjectId();
 
-            EmployeeInfo info = directory.findByAttendanceId(attendanceId).orElse(null);
-            ResourceProjectMapping mapping =
-                    resourceProjectMappingRepository.findById(attendanceId).orElse(null);
+            Set<LocalDate> absentDates = resourceRows.stream()
+                    .filter(a -> a.getStatus() == AttendanceStatus.A)
+                    .map(Attendance::getAttendanceDate)
+                    .collect(Collectors.toSet());
 
-            String mappingName = mapping != null && mapping.getEmployeeName() != null
-                    && !mapping.getEmployeeName().isBlank() ? mapping.getEmployeeName() : null;
-            String infoName = info != null && info.employeeName() != null
-                    && !info.employeeName().isBlank() ? info.employeeName() : null;
-            String employeeName = mappingName != null ? mappingName
-                    : (infoName != null ? infoName : sheetName);
+            LocalDate joiningDate = projectResourceRepository
+                    .findByResourceIdAndActiveTrue(resource.getId())
+                    .map(ProjectResource::getAssignmentStartDate)
+                    .orElse(resource.getDateOfJoining());
 
-            LocalDate mappingJoining = mapping != null ? mapping.getJoiningDate() : null;
-            LocalDate joiningDate = mappingJoining != null ? mappingJoining
-                    : (info != null ? info.joiningDate() : null);
-
-            int maxLeaves = Optional.ofNullable(mapping)
-                    .map(m -> projectConfigRepository.findById(m.getProjectId()).orElse(null))
+            int maxLeaves = projectConfigRepository
+                    .findById(resourceProjectId)
                     .map(ProjectConfig::getMaxLeavesPerPeriod)
                     .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
 
             QuarterLeaveCalculation calculation =
                     policy.compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves);
 
-            settlements.add(new ResourceQuarterSettlement(attendanceId, employeeName, joiningDate, calculation));
+            settlements.add(
+                    new ResourceQuarterSettlement(resource.getResId(), resource.getName(), joiningDate, calculation));
         }
         settlements.sort(Comparator.comparing(ResourceQuarterSettlement::attendanceId));
 
@@ -431,30 +439,5 @@ public class AttendanceQueryService {
                 monthsWithData.stream().sorted().toList(),
                 settlements.size(),
                 settlements);
-    }
-
-    /** Absent day-numbers restricted to weekdays (weekend 0/0 cells carry no meaning). */
-    private Set<Integer> absentWeekdays(int year, int month, Set<Integer> absentDays) {
-        int lengthOfMonth = LocalDate.of(year, month, 1).lengthOfMonth();
-        Set<Integer> weekdays = new HashSet<>();
-        for (Integer day : absentDays) {
-            if (day < 1 || day > lengthOfMonth) {
-                continue;
-            }
-            DayOfWeek dow = LocalDate.of(year, month, day).getDayOfWeek();
-            if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) {
-                weekdays.add(day);
-            }
-        }
-        return weekdays;
-    }
-
-    private void validateMonthAndYear(int year, int month) {
-        if (month < 1 || month > 12) {
-            throw new BadRequestException("month must be between 1 and 12");
-        }
-        if (year < 1970 || year > 9999) {
-            throw new BadRequestException("year must be between 1970 and 9999");
-        }
     }
 }
