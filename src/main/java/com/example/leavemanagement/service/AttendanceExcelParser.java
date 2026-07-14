@@ -1,9 +1,11 @@
 package com.example.leavemanagement.service;
 
-import com.example.leavemanagement.dto.EmployeeAttendance;
+import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.exception.BadRequestException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -22,7 +24,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * Reads a monthly attendance spreadsheet into per-employee absence data.
+ * Reads an attendance spreadsheet into per-employee absence data for a given Attendance Start
+ * Date / Attendance End Date period.
  *
  * <p>Each employee spans <b>3 rows</b> labelled (in column D) In-Time, Out-Time and
  * Total-Time. An employee block is located by its <b>In-Time</b> row — this tolerates
@@ -32,10 +35,14 @@ import org.springframework.web.multipart.MultipartFile;
  * <ul>
  *   <li>Column A — Attendance ID, B — Employee Name, C — Designation.
  *   <li>Column D — the row label (In-Time / Out-Time / Total-Time).
- *   <li>Columns E.. — day-of-month 1..31 (day {@code d} is column index {@code 3 + d}).
+ *   <li>Columns E.. — one column per day of the selected period, in order: column {@code
+ *       LABEL_COL + n} is {@code startDate.plusDays(n - 1)}.
  * </ul>
  *
- * A day where both the In-Time and Out-Time cells are 0/blank is recorded as an
+ * <p>The sheet must have exactly as many day columns as the period has days — see {@link
+ * #detectColumnCount(Sheet)}.
+ *
+ * <p>A day where both the In-Time and Out-Time cells are 0/blank is recorded as an
  * absence for that employee.
  */
 @Component
@@ -45,24 +52,31 @@ public class AttendanceExcelParser {
     private static final int COL_EMPLOYEE_NAME = 1;
     private static final int COL_DESIGNATION = 2;
     private static final int LABEL_COL = 3; // column D — first day column is LABEL_COL + 1
-    private static final int MAX_DAY = 31;
     private static final String IN_TIME = "intime";
     private static final String OUT_TIME = "outtime";
 
     private final DataFormatter formatter = new DataFormatter();
 
-    public List<EmployeeAttendance> parse(MultipartFile file) {
+    public List<EmployeeAttendanceByDate> parse(MultipartFile file, LocalDate startDate, LocalDate endDate) {
         if (file == null || file.isEmpty()) {
             throw new BadRequestException("An attendance Excel file is required (form field 'file')");
         }
+        int expectedDays = (int) ChronoUnit.DAYS.between(startDate, endDate) + 1;
 
-        List<EmployeeAttendance> result = new ArrayList<>();
+        List<EmployeeAttendanceByDate> result = new ArrayList<>();
         try (InputStream in = file.getInputStream();
                 Workbook workbook = WorkbookFactory.create(in)) {
 
             Sheet sheet = workbook.getSheetAt(0);
             if (sheet == null) {
                 throw new BadRequestException("The workbook has no sheets");
+            }
+
+            int actualDays = detectColumnCount(sheet);
+            if (actualDays != expectedDays) {
+                throw new BadRequestException(
+                        "Attendance sheet does not match the selected attendance period.\n"
+                                + "Expected " + expectedDays + " days but found " + actualDays + " days.");
             }
 
             for (int r = sheet.getFirstRowNum(); r <= sheet.getLastRowNum(); r++) {
@@ -72,16 +86,17 @@ public class AttendanceExcelParser {
                 }
                 Row outRow = findLabelledRow(sheet, r + 1, OUT_TIME, 3);
 
-                Set<Integer> absentDays = new LinkedHashSet<>();
-                Map<Integer, Integer> workedMinutesByDay = new LinkedHashMap<>();
-                for (int day = 1; day <= MAX_DAY; day++) {
-                    int col = LABEL_COL + day;
+                Set<LocalDate> absentDates = new LinkedHashSet<>();
+                Map<LocalDate, Integer> workedMinutesByDate = new LinkedHashMap<>();
+                for (int offset = 1; offset <= expectedDays; offset++) {
+                    int col = LABEL_COL + offset;
+                    LocalDate date = startDate.plusDays(offset - 1L);
                     Cell inCell = inRow.getCell(col);
                     Cell outCell = outRow == null ? null : outRow.getCell(col);
                     boolean inZero = isZero(inCell);
                     boolean outZero = isZero(outCell);
                     if (inZero && outZero) {
-                        absentDays.add(day);
+                        absentDates.add(date);
                     } else if (!inZero && !outZero) {
                         OptionalInt inMinutes = minutesOfDay(inCell);
                         OptionalInt outMinutes = minutesOfDay(outCell);
@@ -90,17 +105,17 @@ public class AttendanceExcelParser {
                             if (worked < 0) {
                                 worked += 24 * 60; // clock wrapped past midnight
                             }
-                            workedMinutesByDay.put(day, worked);
+                            workedMinutesByDate.put(date, worked);
                         }
                     }
                 }
 
-                result.add(new EmployeeAttendance(
+                result.add(new EmployeeAttendanceByDate(
                         text(inRow.getCell(COL_ATTENDANCE_ID)),
                         text(inRow.getCell(COL_EMPLOYEE_NAME)),
                         text(inRow.getCell(COL_DESIGNATION)),
-                        absentDays,
-                        workedMinutesByDay));
+                        absentDates,
+                        workedMinutesByDate));
             }
         } catch (IOException e) {
             throw new BadRequestException("Could not read the attendance file: " + e.getMessage());
@@ -114,26 +129,59 @@ public class AttendanceExcelParser {
     }
 
     /**
+     * Number of date columns present in the sheet, used to validate against the selected
+     * period's day count. Determined by scanning each employee's In-Time row for the longest
+     * contiguous run of non-blank cells starting right after the label column — the maximum
+     * across all In-Time rows is taken, since any one employee's row may have trailing blank
+     * cells for unrelated reasons (e.g. a rejoin partway through the period).
+     */
+    private int detectColumnCount(Sheet sheet) {
+        int maxColumns = 0;
+        for (int r = sheet.getFirstRowNum(); r <= sheet.getLastRowNum(); r++) {
+            Row row = sheet.getRow(r);
+            if (row == null || !IN_TIME.equals(label(row))) {
+                continue;
+            }
+            maxColumns = Math.max(maxColumns, countTrailingNonBlank(row));
+        }
+        return maxColumns;
+    }
+
+    private int countTrailingNonBlank(Row row) {
+        int count = 0;
+        int col = LABEL_COL + 1;
+        while (true) {
+            Cell cell = row.getCell(col);
+            if (cell == null || cell.getCellType() == CellType.BLANK) {
+                break;
+            }
+            count++;
+            col++;
+        }
+        return count;
+    }
+
+    /**
      * Ensures every employee has a unique id. Some exports mask the attendance id
      * (the same value, e.g. "XXXXXX", on every row), which would make resources
      * indistinguishable. When the ids are not all unique, they are replaced with
      * stable positional ids {@code R1, R2, …} (so the Nth resource lines up across
      * months); when they are already unique, the originals are kept.
      */
-    private List<EmployeeAttendance> assignUniqueIds(List<EmployeeAttendance> employees) {
+    private List<EmployeeAttendanceByDate> assignUniqueIds(List<EmployeeAttendanceByDate> employees) {
         long distinctNonBlank = employees.stream()
-                .map(EmployeeAttendance::attendanceId)
+                .map(EmployeeAttendanceByDate::attendanceId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
                 .count();
         if (distinctNonBlank == employees.size()) {
             return employees; // already unique
         }
-        List<EmployeeAttendance> keyed = new ArrayList<>(employees.size());
+        List<EmployeeAttendanceByDate> keyed = new ArrayList<>(employees.size());
         for (int i = 0; i < employees.size(); i++) {
-            EmployeeAttendance e = employees.get(i);
-            keyed.add(new EmployeeAttendance(
-                    "R" + (i + 1), e.employeeName(), e.designation(), e.absentDays(), e.workedMinutesByDay()));
+            EmployeeAttendanceByDate e = employees.get(i);
+            keyed.add(new EmployeeAttendanceByDate(
+                    "R" + (i + 1), e.employeeName(), e.designation(), e.absentDates(), e.workedMinutesByDate()));
         }
         return keyed;
     }
