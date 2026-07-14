@@ -7,7 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.leavemanagement.client.EmployeeDirectoryClient;
 import com.example.leavemanagement.client.EmployeeInfo;
-import com.example.leavemanagement.dto.EmployeeAttendance;
+import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
@@ -55,9 +55,18 @@ class AttendanceLeaveServiceTest {
         // Absent Mon 8 (working) -> 1 leave day. Worked minutes: day2=7.5h and day4=5h
         // day2=7.5h and day4=5h are short (>4,<8); day5=3h is a half day (<=4h);
         // day1=8h and day3=9h are full days.
-        EmployeeAttendance e = new EmployeeAttendance(
-                "E1", "Asha", "Dev", Set.of(8), Map.of(1, 480, 2, 450, 3, 540, 4, 300, 5, 180));
-        when(parser.parse(any())).thenReturn(List.of(e));
+        EmployeeAttendanceByDate e = new EmployeeAttendanceByDate(
+                "E1",
+                "Asha",
+                "Dev",
+                Set.of(LocalDate.of(2026, 6, 8)),
+                Map.of(
+                        LocalDate.of(2026, 6, 1), 480,
+                        LocalDate.of(2026, 6, 2), 450,
+                        LocalDate.of(2026, 6, 3), 540,
+                        LocalDate.of(2026, 6, 4), 300,
+                        LocalDate.of(2026, 6, 5), 180));
+        when(parser.parse(any(), any(), any())).thenReturn(List.of(e));
         when(directory.findByAttendanceId("E1"))
                 .thenReturn(Optional.of(new EmployeeInfo("E1", "Asha Kumar", "Dev", null)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))

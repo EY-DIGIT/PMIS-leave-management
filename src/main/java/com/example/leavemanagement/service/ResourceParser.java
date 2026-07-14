@@ -13,6 +13,7 @@ import java.util.Map;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -67,6 +68,7 @@ public class ResourceParser {
             if (sheet == null) {
                 throw new BadRequestException("The workbook has no sheets");
             }
+            FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
 
             for (Row row : sheet) {
                 if (row.getRowNum() < HEADER_ROWS) {
@@ -76,18 +78,18 @@ public class ResourceParser {
                     continue; // skip fully blank trailing rows
                 }
                 int humanRow = row.getRowNum() + 1;
-                LocalDate lastDayOfWorking =
-                        readDate(row.getCell(COL_LAST_DAY_OF_WORKING), humanRow, "Last Day of Working", false);
+                LocalDate lastDayOfWorking = readDate(
+                        row.getCell(COL_LAST_DAY_OF_WORKING), evaluator, humanRow, "Last Day of Working", false);
                 rows.add(new ResourceRow(
-                        text(row.getCell(COL_RES_ID)),
-                        readName(row.getCell(COL_NAME), humanRow),
-                        text(row.getCell(COL_ROLE)),
-                        text(row.getCell(COL_LOCATION)),
-                        readDate(row.getCell(COL_DATE_OF_JOINING), humanRow, "Date of Joining", true),
+                        text(row.getCell(COL_RES_ID), evaluator),
+                        readName(row.getCell(COL_NAME), evaluator, humanRow),
+                        text(row.getCell(COL_ROLE), evaluator),
+                        text(row.getCell(COL_LOCATION), evaluator),
+                        readDate(row.getCell(COL_DATE_OF_JOINING), evaluator, humanRow, "Date of Joining", true),
                         lastDayOfWorking,
-                        readRateCardByYear(row, humanRow),
-                        text(row.getCell(COL_CATEGORY)),
-                        text(row.getCell(COL_CATEGORY_DETAILS)),
+                        readRateCardByYear(row, evaluator, humanRow),
+                        text(row.getCell(COL_CATEGORY), evaluator),
+                        text(row.getCell(COL_CATEGORY_DETAILS), evaluator),
                         lastDayOfWorking == null));
             }
         } catch (IOException e) {
@@ -100,15 +102,15 @@ public class ResourceParser {
         return rows;
     }
 
-    private String readName(Cell cell, int humanRow) {
-        String name = text(cell);
+    private String readName(Cell cell, FormulaEvaluator evaluator, int humanRow) {
+        String name = text(cell, evaluator);
         if (name.isEmpty()) {
             throw new BadRequestException("Row %d: Employee Name (column B) is missing".formatted(humanRow));
         }
         return name;
     }
 
-    private Map<String, Double> readRateCardByYear(Row row, int humanRow) {
+    private Map<String, Double> readRateCardByYear(Row row, FormulaEvaluator evaluator, int humanRow) {
         Map<String, Double> rates = new LinkedHashMap<>();
         for (int i = 0; i < YEAR_COLUMNS; i++) {
             Cell cell = row.getCell(COL_YEAR_1 + i);
@@ -116,11 +118,11 @@ public class ResourceParser {
                 continue;
             }
             String yearLabel = "Year-" + (i + 1);
-            if (cell.getCellType() == CellType.NUMERIC) {
+            if (effectiveType(cell, evaluator) == CellType.NUMERIC) {
                 rates.put(yearLabel, cell.getNumericCellValue());
                 continue;
             }
-            String text = text(cell);
+            String text = text(cell, evaluator);
             try {
                 rates.put(yearLabel, Double.parseDouble(text));
             } catch (NumberFormatException e) {
@@ -131,17 +133,18 @@ public class ResourceParser {
         return rates;
     }
 
-    private LocalDate readDate(Cell cell, int humanRow, String columnLabel, boolean required) {
+    private LocalDate readDate(
+            Cell cell, FormulaEvaluator evaluator, int humanRow, String columnLabel, boolean required) {
         if (isBlank(cell)) {
             if (required) {
                 throw new BadRequestException("Row %d: %s is missing".formatted(humanRow, columnLabel));
             }
             return null;
         }
-        if (cell.getCellType() == CellType.NUMERIC) {
+        if (effectiveType(cell, evaluator) == CellType.NUMERIC) {
             return cell.getLocalDateTimeCellValue().toLocalDate();
         }
-        String text = text(cell);
+        String text = text(cell, evaluator);
         try {
             return LocalDate.parse(text);
         } catch (DateTimeParseException e) {
@@ -158,7 +161,13 @@ public class ResourceParser {
                         && cell.getStringCellValue().trim().isEmpty());
     }
 
-    private String text(Cell cell) {
-        return cell == null ? "" : formatter.formatCellValue(cell).trim();
+    /** The cell's real value type — for a FORMULA cell, the type its calculated result evaluates to. */
+    private CellType effectiveType(Cell cell, FormulaEvaluator evaluator) {
+        return cell.getCellType() == CellType.FORMULA ? evaluator.evaluateFormulaCell(cell) : cell.getCellType();
+    }
+
+    /** Formats a cell's calculated value — resolves formulas via {@code evaluator} rather than printing them. */
+    private String text(Cell cell, FormulaEvaluator evaluator) {
+        return cell == null ? "" : formatter.formatCellValue(cell, evaluator).trim();
     }
 }

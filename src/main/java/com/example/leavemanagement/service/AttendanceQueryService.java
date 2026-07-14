@@ -5,6 +5,7 @@ import com.example.leavemanagement.client.EmployeeInfo;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.AttendanceSummaryReport;
 import com.example.leavemanagement.dto.EmployeeAttendance;
+import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyAttendanceStored;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
@@ -26,10 +27,12 @@ import com.example.leavemanagement.repository.ResourceProjectMappingRepository;
 import java.util.Optional;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -81,76 +84,85 @@ public class AttendanceQueryService {
     }
 
     /**
-     * Parses and upserts a monthly attendance sheet so it can be queried later.
-     * Only absent weekdays are kept; worked minutes per day are stored for the
-     * short-hours calculation. Re-uploading a month overwrites it.
+     * Parses and upserts an attendance sheet for the given Attendance Start Date / Attendance
+     * End Date period. Only absent weekdays are kept; worked minutes per day are stored for the
+     * short-hours calculation. A period spanning more than one calendar month is split and
+     * stored as one row-set per covered month; re-uploading a month overwrites it.
      */
     @Transactional
     public MonthlyAttendanceStored storeMonthly(
-            int year,
-            int month,
-            String milestoneId,
-            String projectId,
-            LocalDate startDate,
-            LocalDate endDate,
-            MultipartFile file) {
-        validateMonthAndYear(year, month);
-        validateCompleteMonthRange(startDate, endDate);
-        List<EmployeeAttendance> parsed = parser.parse(file);
-        Map<String, LeavePolicyResponse> leavePolicies = validateResourcesAndFetchLeavePolicies(parsed, projectId);
-        int stored = persist(year, month, milestoneId, projectId, parsed);
-        return new MonthlyAttendanceStored(year, month, stored, leavePolicies);
+            String milestoneId, String projectId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
+        validatePeriod(startDate, endDate);
+        List<EmployeeAttendanceByDate> parsed = parser.parse(file, startDate, endDate);
+        Map<String, LeavePolicyResponse> leavePolicies =
+                validateResourcesAndFetchLeavePolicies(attendanceIds(parsed), projectId);
+        List<MonthlyAttendanceStored.MonthCount> months = persist(startDate, endDate, milestoneId, projectId, parsed);
+        return new MonthlyAttendanceStored(startDate, endDate, months, leavePolicies);
     }
 
     /**
-     * Stores the month's attendance and returns its summary in one call — used by
-     * the upload endpoint so the data is immediately available to the GET summary
-     * and the quarterly settlement.
+     * Stores the period's attendance and returns one summary per covered calendar month — used
+     * by the upload endpoint so the data is immediately available to the GET summary and the
+     * quarterly settlement.
      */
     @Transactional
-    public MonthlyAttendanceSummary storeAndSummarize(
-            int year,
-            int month,
-            String milestoneId,
-            String projectId,
-            LocalDate startDate,
-            LocalDate endDate,
-            MultipartFile file) {
-        validateMonthAndYear(year, month);
-        validateCompleteMonthRange(startDate, endDate);
-        List<EmployeeAttendance> parsed = parser.parse(file);
-        validateResourcesAndFetchLeavePolicies(parsed, projectId);
-        persist(year, month, milestoneId, projectId, parsed);
-        return attendanceLeaveService.buildSummary(year, month, parsed);
+    public List<MonthlyAttendanceSummary> storeAndSummarize(
+            String milestoneId, String projectId, LocalDate startDate, LocalDate endDate, MultipartFile file) {
+        validatePeriod(startDate, endDate);
+        List<EmployeeAttendanceByDate> parsed = parser.parse(file, startDate, endDate);
+        validateResourcesAndFetchLeavePolicies(attendanceIds(parsed), projectId);
+        persist(startDate, endDate, milestoneId, projectId, parsed);
+        return coveredYearMonths(startDate, endDate).stream()
+                .map(ym -> attendanceLeaveService.buildSummary(
+                        ym.getYear(), ym.getMonthValue(), forMonth(parsed, ym)))
+                .toList();
     }
 
-    /**
-     * When startDate/endDate are supplied, verifies they span a <b>complete month</b>: either the
-     * 1st to the last day of a calendar month (e.g. 1 Jun - 30 Jun), or a rolling month from
-     * startDate to the same date one month later (e.g. 4 Jun - 4 Jul). Both dates are optional, but
-     * must be given together. Rejects the whole upload otherwise.
-     */
-    private void validateCompleteMonthRange(LocalDate startDate, LocalDate endDate) {
-        if (startDate == null && endDate == null) {
-            return;
-        }
+    private List<String> attendanceIds(List<EmployeeAttendanceByDate> parsed) {
+        return parsed.stream().map(EmployeeAttendanceByDate::attendanceId).toList();
+    }
+
+    /** Validates Attendance Start Date <= Attendance End Date. */
+    private void validatePeriod(LocalDate startDate, LocalDate endDate) {
         if (startDate == null || endDate == null) {
-            throw new AttendanceValidationException(
-                    List.of("Both startDate and endDate must be provided together."));
+            throw new BadRequestException("Attendance Start Date and Attendance End Date are required.");
         }
         if (startDate.isAfter(endDate)) {
-            throw new AttendanceValidationException(List.of("startDate must not be after endDate."));
+            throw new BadRequestException("Attendance Start Date cannot be greater than Attendance End Date.");
         }
-        boolean fullCalendarMonth = startDate.getDayOfMonth() == 1
-                && endDate.equals(startDate.withDayOfMonth(startDate.lengthOfMonth()));
-        boolean rollingMonth = endDate.equals(startDate.plusMonths(1));
-        if (!fullCalendarMonth && !rollingMonth) {
-            throw new AttendanceValidationException(List.of(
-                    ("startDate (%s) to endDate (%s) does not span a complete month — it must be either the 1st "
-                                    + "to the last day of a calendar month, or startDate to the same date one "
-                                    + "month later.")
-                            .formatted(startDate, endDate)));
+    }
+
+    /** Every calendar month touched by [startDate, endDate], ascending. */
+    private List<YearMonth> coveredYearMonths(LocalDate startDate, LocalDate endDate) {
+        List<YearMonth> months = new ArrayList<>();
+        YearMonth cursor = YearMonth.from(startDate);
+        YearMonth end = YearMonth.from(endDate);
+        while (!cursor.isAfter(end)) {
+            months.add(cursor);
+            cursor = cursor.plusMonths(1);
         }
+        return months;
+    }
+
+    /** Restricts the date-keyed parsed rows to one calendar month, in the legacy day-of-month shape. */
+    private List<EmployeeAttendance> forMonth(List<EmployeeAttendanceByDate> parsed, YearMonth yearMonth) {
+        List<EmployeeAttendance> result = new ArrayList<>();
+        for (EmployeeAttendanceByDate employee : parsed) {
+            Set<Integer> absentDays = employee.absentDates().stream()
+                    .filter(date -> YearMonth.from(date).equals(yearMonth))
+                    .map(LocalDate::getDayOfMonth)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            Map<Integer, Integer> workedMinutesByDay = new LinkedHashMap<>();
+            employee.workedMinutesByDate().forEach((date, minutes) -> {
+                if (YearMonth.from(date).equals(yearMonth)) {
+                    workedMinutesByDay.put(date.getDayOfMonth(), minutes);
+                }
+            });
+            result.add(new EmployeeAttendance(
+                    employee.attendanceId(), employee.employeeName(), employee.designation(), absentDays,
+                    workedMinutesByDay));
+        }
+        return result;
     }
 
     /**
@@ -161,11 +173,10 @@ public class AttendanceQueryService {
      * is persisted.
      */
     private Map<String, LeavePolicyResponse> validateResourcesAndFetchLeavePolicies(
-            List<EmployeeAttendance> employees, String projectId) {
+            List<String> attendanceIds, String projectId) {
         List<String> errors = new ArrayList<>();
 
-        for (EmployeeAttendance employee : employees) {
-            String attendanceId = employee.attendanceId();
+        for (String attendanceId : attendanceIds) {
             Optional<MasterResource> resource = masterResourceRepository.findByResIdAndActiveTrue(attendanceId);
             if (resource.isEmpty()) {
                 if (masterResourceRepository.existsByResId(attendanceId)) {
@@ -201,31 +212,44 @@ public class AttendanceQueryService {
         return leavePoliciesByProject;
     }
 
-    /** Replaces the month's stored rows with the freshly parsed set (handles repeated/masked ids). */
-    private int persist(
-            int year, int month, String milestoneId, String projectId, List<EmployeeAttendance> employees) {
-        List<ResourceMonthlyAttendance> existing = attendanceRepository.findByYearAndMonth(year, month);
-        if (!existing.isEmpty()) {
-            attendanceRepository.deleteAll(existing);
-            attendanceRepository.flush(); // apply deletes before inserting the replacements
+    /**
+     * Splits the period into its covered calendar months and, for each, replaces that month's
+     * stored rows with the freshly parsed set (handles repeated/masked ids).
+     */
+    private List<MonthlyAttendanceStored.MonthCount> persist(
+            LocalDate startDate,
+            LocalDate endDate,
+            String milestoneId,
+            String projectId,
+            List<EmployeeAttendanceByDate> parsed) {
+        List<MonthlyAttendanceStored.MonthCount> counts = new ArrayList<>();
+        for (YearMonth yearMonth : coveredYearMonths(startDate, endDate)) {
+            int year = yearMonth.getYear();
+            int month = yearMonth.getMonthValue();
+            List<ResourceMonthlyAttendance> existing = attendanceRepository.findByYearAndMonth(year, month);
+            if (!existing.isEmpty()) {
+                attendanceRepository.deleteAll(existing);
+                attendanceRepository.flush(); // apply deletes before inserting the replacements
+            }
+            LocalDate asOfDate = LocalDate.of(year, month, 1);
+            int stored = 0;
+            for (EmployeeAttendance employee : forMonth(parsed, yearMonth)) {
+                ResourceMonthlyAttendance row = new ResourceMonthlyAttendance(
+                        employee.attendanceId(),
+                        employee.employeeName(),
+                        resolveDesignation(employee, asOfDate),
+                        milestoneId,
+                        projectId,
+                        year,
+                        month);
+                row.setAbsentDays(absentWeekdays(year, month, employee.absentDays()));
+                row.setWorkedMinutesByDay(new LinkedHashMap<>(employee.workedMinutesByDay()));
+                attendanceRepository.save(row);
+                stored++;
+            }
+            counts.add(new MonthlyAttendanceStored.MonthCount(year, month, stored));
         }
-        LocalDate asOfDate = LocalDate.of(year, month, 1);
-        int stored = 0;
-        for (EmployeeAttendance employee : employees) {
-            ResourceMonthlyAttendance row = new ResourceMonthlyAttendance(
-                    employee.attendanceId(),
-                    employee.employeeName(),
-                    resolveDesignation(employee, asOfDate),
-                    milestoneId,
-                    projectId,
-                    year,
-                    month);
-            row.setAbsentDays(absentWeekdays(year, month, employee.absentDays()));
-            row.setWorkedMinutesByDay(new LinkedHashMap<>(employee.workedMinutesByDay()));
-            attendanceRepository.save(row);
-            stored++;
-        }
-        return stored;
+        return counts;
     }
 
     /**

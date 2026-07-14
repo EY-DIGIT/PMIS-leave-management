@@ -105,6 +105,38 @@ class ResourceParserTest {
         }
     }
 
+    @Test
+    void resolvesAutofilledFormulaCellsToTheirCalculatedResultNotFormulaText() {
+        try (XSSFWorkbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Resources");
+            sheet.createRow(0).createCell(0).setCellValue("Resource details");
+            Row header = sheet.createRow(1);
+            header.createCell(0).setCellValue("Attendance ID");
+            header.createCell(1).setCellValue("Employee Name");
+
+            // Row 2: literal seed value.
+            Row r1 = sheet.createRow(2);
+            r1.createCell(0).setCellValue(1);
+            r1.createCell(1).setCellValue("Sanju");
+            r1.createCell(4).setCellValue("2026-01-01");
+
+            // Row 3: Excel autofill drags down a relative formula "=A3+1" rather than a value.
+            Row r2 = sheet.createRow(3);
+            r2.createCell(0).setCellFormula("A3+1");
+            r2.createCell(1).setCellValue("Subhman");
+            r2.createCell(4).setCellValue("2026-01-01");
+
+            List<ResourceRow> rows = parser.parse(toFile(wb));
+
+            assertThat(rows).hasSize(2);
+            assertThat(rows.get(0).resId()).isEqualTo("1");
+            // Must be the calculated result "2", not the raw formula text "A3+1".
+            assertThat(rows.get(1).resId()).isEqualTo("2");
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
     private MockMultipartFile toFile(Workbook wb) throws Exception {
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             wb.write(out);

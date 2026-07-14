@@ -66,7 +66,20 @@ public class AttendanceLeaveService {
     @Transactional(readOnly = true)
     public MonthlyAttendanceSummary summarize(int year, int month, MultipartFile file) {
         validateMonthAndYear(year, month);
-        return buildSummary(year, month, parser.parse(file));
+        LocalDate monthStart = LocalDate.of(year, month, 1);
+        LocalDate monthEnd = monthStart.withDayOfMonth(monthStart.lengthOfMonth());
+        List<EmployeeAttendance> attendance = parser.parse(file, monthStart, monthEnd).stream()
+                .map(e -> new EmployeeAttendance(
+                        e.attendanceId(),
+                        e.employeeName(),
+                        e.designation(),
+                        e.absentDates().stream().map(java.time.LocalDate::getDayOfMonth)
+                                .collect(java.util.stream.Collectors.toSet()),
+                        e.workedMinutesByDate().entrySet().stream()
+                                .collect(java.util.stream.Collectors.toMap(
+                                        en -> en.getKey().getDayOfMonth(), Map.Entry::getValue))))
+                .toList();
+        return buildSummary(year, month, attendance);
     }
 
     /**

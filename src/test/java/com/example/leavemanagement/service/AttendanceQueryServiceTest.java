@@ -11,6 +11,7 @@ import com.example.leavemanagement.client.EmployeeInfo;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.AttendanceSummaryReport;
 import com.example.leavemanagement.dto.EmployeeAttendance;
+import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyAttendanceStored;
 import com.example.leavemanagement.dto.MonthlyAttendanceSummary;
@@ -167,9 +168,12 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void storeAndSummarizePersistsAndReturnsSummary() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of(6, 500))));
+    void storeAndSummarizePersistsAndReturnsOneSummaryPerCoveredMonth() {
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2026, 5, 6), LocalDate.of(2026, 5, 7)),
+                        Map.of(LocalDate.of(2026, 5, 6), 500))));
         stubActiveResource("E1", "P1");
         when(leavePolicyClient.getLeavePolicy("P1"))
                 .thenReturn(Optional.of(new LeavePolicyResponse("MONTHLY", 4d, 8d, true)));
@@ -179,26 +183,32 @@ class AttendanceQueryServiceTest {
         when(attendanceLeaveService.buildSummary(eq(2026), eq(5), any())).thenReturn(sentinel);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        MonthlyAttendanceSummary result = service.storeAndSummarize(2026, 5, "M1", "P1", null, null, file);
+        List<MonthlyAttendanceSummary> result = service.storeAndSummarize(
+                "M1", "P1", LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), file);
 
-        assertThat(result).isSameAs(sentinel); // summary returned
+        assertThat(result).containsExactly(sentinel); // summary returned
         org.mockito.Mockito.verify(attendanceRepository).save(any(ResourceMonthlyAttendance.class)); // and persisted
     }
 
     @Test
     void storeMonthlyKeepsOnlyWeekdayAbsencesAndPersistsWorkedMinutes() {
         // June 2024: 1 Sat, 2 Sun (dropped), 6 Thu, 7 Fri (kept).
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(1, 2, 6, 7), Map.of(6, 500))));
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2024, 6, 1), LocalDate.of(2024, 6, 2), LocalDate.of(2024, 6, 6),
+                                LocalDate.of(2024, 6, 7)),
+                        Map.of(LocalDate.of(2024, 6, 6), 500))));
         stubActiveResource("E1", "P1");
         LeavePolicyResponse leavePolicy = new LeavePolicyResponse("MONTHLY", 4d, 8d, true);
         when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.of(leavePolicy));
         when(attendanceRepository.findByYearAndMonth(2024, 6)).thenReturn(List.of()); // no existing rows
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        MonthlyAttendanceStored stored = service.storeMonthly(2024, 6, "M1", "P1", null, null, file);
+        MonthlyAttendanceStored stored = service.storeMonthly(
+                "M1", "P1", LocalDate.of(2024, 6, 1), LocalDate.of(2024, 6, 30), file);
 
-        assertThat(stored.resourcesStored()).isEqualTo(1);
+        assertThat(stored.months()).containsExactly(new MonthlyAttendanceStored.MonthCount(2024, 6, 1));
         assertThat(stored.leavePoliciesByProject()).containsEntry("P1", leavePolicy);
         ArgumentCaptor<ResourceMonthlyAttendance> captor = ArgumentCaptor.forClass(ResourceMonthlyAttendance.class);
         org.mockito.Mockito.verify(attendanceRepository).save(captor.capture());
@@ -208,14 +218,42 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
+    void storeMonthlySplitsCrossMonthPeriodIntoOneRowSetPerCoveredMonth() {
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2026, 7, 25), LocalDate.of(2026, 8, 1)),
+                        Map.of())));
+        stubActiveResource("E1", "P1");
+        when(leavePolicyClient.getLeavePolicy("P1"))
+                .thenReturn(Optional.of(new LeavePolicyResponse("MONTHLY", 4d, 8d, true)));
+        when(attendanceRepository.findByYearAndMonth(2026, 7)).thenReturn(List.of());
+        when(attendanceRepository.findByYearAndMonth(2026, 8)).thenReturn(List.of());
+
+        MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
+        MonthlyAttendanceStored stored = service.storeMonthly(
+                "M1", "P1", LocalDate.of(2026, 7, 25), LocalDate.of(2026, 8, 24), file);
+
+        assertThat(stored.months())
+                .containsExactly(
+                        new MonthlyAttendanceStored.MonthCount(2026, 7, 1),
+                        new MonthlyAttendanceStored.MonthCount(2026, 8, 1));
+        org.mockito.Mockito.verify(attendanceRepository, org.mockito.Mockito.times(2)).save(any());
+    }
+
+    @Test
     void storeMonthlyRejectsWholeUploadWhenResourceDoesNotExist() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2024, 6, 6), LocalDate.of(2024, 6, 7)),
+                        Map.of())));
         when(masterResourceRepository.findByResIdAndActiveTrue("E1")).thenReturn(Optional.empty());
         when(masterResourceRepository.existsByResId("E1")).thenReturn(false);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        assertThatThrownBy(() -> service.storeMonthly(2024, 6, "M1", "P1", null, null, file))
+        assertThatThrownBy(() -> service.storeMonthly(
+                        "M1", "P1", LocalDate.of(2024, 6, 1), LocalDate.of(2024, 6, 30), file))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 does not exist."));
@@ -224,13 +262,17 @@ class AttendanceQueryServiceTest {
 
     @Test
     void storeMonthlyRejectsWholeUploadWhenResourceIsInactive() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2024, 6, 6), LocalDate.of(2024, 6, 7)),
+                        Map.of())));
         when(masterResourceRepository.findByResIdAndActiveTrue("E1")).thenReturn(Optional.empty());
         when(masterResourceRepository.existsByResId("E1")).thenReturn(true);
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        assertThatThrownBy(() -> service.storeMonthly(2024, 6, "M1", "P1", null, null, file))
+        assertThatThrownBy(() -> service.storeMonthly(
+                        "M1", "P1", LocalDate.of(2024, 6, 1), LocalDate.of(2024, 6, 30), file))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 is inactive."));
@@ -239,13 +281,17 @@ class AttendanceQueryServiceTest {
 
     @Test
     void storeMonthlyRejectsWholeUploadWhenLeavePolicyFetchFails() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2024, 6, 6), LocalDate.of(2024, 6, 7)),
+                        Map.of())));
         stubActiveResource("E1", "P1");
         when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.empty());
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        assertThatThrownBy(() -> service.storeMonthly(2024, 6, "M1", "P1", null, null, file))
+        assertThatThrownBy(() -> service.storeMonthly(
+                        "M1", "P1", LocalDate.of(2024, 6, 1), LocalDate.of(2024, 6, 30), file))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Could not fetch leave policy for project P1."));
@@ -254,12 +300,16 @@ class AttendanceQueryServiceTest {
 
     @Test
     void storeMonthlyRejectsWholeUploadWhenResourceBelongsToDifferentProject() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2024, 6, 6), LocalDate.of(2024, 6, 7)),
+                        Map.of())));
         stubActiveResource("E1", "P1");
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        assertThatThrownBy(() -> service.storeMonthly(2024, 6, "M1", "P2", null, null, file))
+        assertThatThrownBy(() -> service.storeMonthly(
+                        "M1", "P2", LocalDate.of(2024, 6, 1), LocalDate.of(2024, 6, 30), file))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 belongs to project P1, not P2."));
@@ -295,59 +345,41 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void storeMonthlyAcceptsFullCalendarMonthRange() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
+    void storeMonthlyAcceptsPartialMonthRange() {
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate(
+                        "E1", "Asha", "Dev",
+                        Set.of(LocalDate.of(2026, 6, 6), LocalDate.of(2026, 6, 7)),
+                        Map.of())));
         stubActiveResource("E1", "P1");
         when(leavePolicyClient.getLeavePolicy("P1"))
                 .thenReturn(Optional.of(new LeavePolicyResponse("MONTHLY", 4d, 8d, true)));
         when(attendanceRepository.findByYearAndMonth(2026, 6)).thenReturn(List.of());
 
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
+        // 4 June -> 20 June: a partial month, now explicitly supported.
         MonthlyAttendanceStored stored = service.storeMonthly(
-                2026, 6, "M1", "P1", LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30), file);
+                "M1", "P1", LocalDate.of(2026, 6, 4), LocalDate.of(2026, 6, 20), file);
 
-        assertThat(stored.resourcesStored()).isEqualTo(1);
+        assertThat(stored.months()).containsExactly(new MonthlyAttendanceStored.MonthCount(2026, 6, 1));
     }
 
     @Test
-    void storeMonthlyAcceptsRollingMonthRange() {
-        when(parser.parse(any()))
-                .thenReturn(List.of(new EmployeeAttendance("E1", "Asha", "Dev", Set.of(6, 7), Map.of())));
-        stubActiveResource("E1", "P1");
-        when(leavePolicyClient.getLeavePolicy("P1"))
-                .thenReturn(Optional.of(new LeavePolicyResponse("MONTHLY", 4d, 8d, true)));
-        when(attendanceRepository.findByYearAndMonth(2026, 6)).thenReturn(List.of());
-
+    void storeMonthlyRejectsStartDateAfterEndDate() {
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        // 4 June -> 4 July: same date one month later.
-        MonthlyAttendanceStored stored = service.storeMonthly(
-                2026, 6, "M1", "P1", LocalDate.of(2026, 6, 4), LocalDate.of(2026, 7, 4), file);
-
-        assertThat(stored.resourcesStored()).isEqualTo(1);
-    }
-
-    @Test
-    void storeMonthlyRejectsIncompleteDateRange() {
-        MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        // 4 June -> 20 June: neither a full calendar month nor a rolling month.
         assertThatThrownBy(() -> service.storeMonthly(
-                        2026, 6, "M1", "P1", LocalDate.of(2026, 6, 4), LocalDate.of(2026, 6, 20), file))
-                .isInstanceOf(AttendanceValidationException.class)
-                .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
-                        .hasSize(1)
-                        .allSatisfy(msg -> assertThat(msg).contains("does not span a complete month")));
+                        "M1", "P1", LocalDate.of(2026, 6, 20), LocalDate.of(2026, 6, 4), file))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessage("Attendance Start Date cannot be greater than Attendance End Date.");
         org.mockito.Mockito.verify(attendanceRepository, org.mockito.Mockito.never()).save(any());
         org.mockito.Mockito.verifyNoInteractions(parser);
     }
 
     @Test
-    void storeMonthlyRejectsWhenOnlyOneOfStartOrEndDateGiven() {
+    void storeMonthlyRejectsMissingDates() {
         MultipartFile file = new MockMultipartFile("file", "att.xlsx", null, new byte[] {1});
-        assertThatThrownBy(() -> service.storeMonthly(2026, 6, "M1", "P1", LocalDate.of(2026, 6, 1), null, file))
-                .isInstanceOf(AttendanceValidationException.class)
-                .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
-                        .containsExactly("Both startDate and endDate must be provided together."));
+        assertThatThrownBy(() -> service.storeMonthly("M1", "P1", LocalDate.of(2026, 6, 1), null, file))
+                .isInstanceOf(BadRequestException.class);
     }
 
     private void stubActiveResource(String attendanceId, String projectId) {
