@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
 public class StubLeavePolicyClient implements LeavePolicyClient {
 
     private static final LeavePolicyResponse SAMPLE_POLICY = new LeavePolicyResponse(
-            4, 8, false, false, true, true, 2, "MONTHLY", true, false, true, false, true);
+            4, 8, false, false, true, true, 2, "MONTHLY", true, false, true, true);
 
     @Override
     public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {

@@ -30,7 +30,7 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
         this.baseUrl = baseUrl;
     }
 
-    @Override
+ /*    @Override
     public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
         try {
             ProjectApiResponse response = restClient
@@ -46,10 +46,9 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
             return Optional.empty();
         }
     }
-  
- 
-    
- /*    @Override
+        */
+
+    @Override
 public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
     return Optional.of(new LeavePolicyResponse(
             4,
@@ -63,11 +62,9 @@ public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
             true,
             false,
             true,
-            false,
             true
     ));
 }
-    */
 
     /** Forwards the current request's bearer token — the projects service requires one. */
     private void propagateCallerToken(HttpHeaders headers) {

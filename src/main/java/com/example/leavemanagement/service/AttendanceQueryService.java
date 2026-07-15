@@ -5,11 +5,14 @@ import com.example.leavemanagement.dto.AttendanceReportSummary;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
+import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
+import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.dto.ResourceQuarterSettlement;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
+import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.ProjectResource;
@@ -18,6 +21,7 @@ import com.example.leavemanagement.exception.AttendanceValidationException;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.AttendanceRepository;
+import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
@@ -63,6 +67,7 @@ public class AttendanceQueryService {
     private final ProjectResourceRepository projectResourceRepository;
     private final ProjectConfigRepository projectConfigRepository;
     private final LeavePolicyClient leavePolicyClient;
+    private final LeaveRelaxationRepository leaveRelaxationRepository;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
@@ -72,7 +77,8 @@ public class AttendanceQueryService {
             MasterResourceRepository masterResourceRepository,
             ProjectResourceRepository projectResourceRepository,
             ProjectConfigRepository projectConfigRepository,
-            LeavePolicyClient leavePolicyClient) {
+            LeavePolicyClient leavePolicyClient,
+            LeaveRelaxationRepository leaveRelaxationRepository) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
@@ -81,6 +87,7 @@ public class AttendanceQueryService {
         this.projectResourceRepository = projectResourceRepository;
         this.projectConfigRepository = projectConfigRepository;
         this.leavePolicyClient = leavePolicyClient;
+        this.leaveRelaxationRepository = leaveRelaxationRepository;
     }
 
     // ------------------------------------------------------------------
@@ -427,6 +434,194 @@ public class AttendanceQueryService {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Resource cost calculator: monthlyRate (from the resource's active assignment's rate card,
+    // keyed by its current rateYear) x attendance ratio for the period. Quarterly/yearly totals
+    // are the sum of each covered month's cost computed separately, not a single ratio blended
+    // over the whole period — so a rate-year change or a month with no attendance is reflected
+    // correctly.
+    // ------------------------------------------------------------------
+
+    /** Dashboard: one month's cost per resource currently active on the project. */
+    @Transactional(readOnly = true)
+    public List<MonthlyResourceCost> monthlyCostReport(String projectId, int year, int month) {
+        validateMonthAndYear(year, month);
+        LocalDate monthStart = LocalDate.of(year, month, 1);
+        String periodLabel = monthStart.format(MONTH_YEAR);
+        return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+                .map(ProjectResource::getResource)
+                .map(resource -> buildMonthlyCost(resource, projectId, monthStart, periodLabel))
+                .toList();
+    }
+
+    /** One resource's cost for one month. */
+    @Transactional(readOnly = true)
+    public MonthlyResourceCost employeeMonthlyCost(String resourceId, int year, int month) {
+        validateMonthAndYear(year, month);
+        MasterResource resource = masterResourceRepository
+                .findByResId(resourceId)
+                .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
+        String projectId = projectResourceRepository
+                .findByResourceIdAndActiveTrue(resource.getId())
+                .map(ProjectResource::getProjectId)
+                .orElse(null);
+        LocalDate monthStart = LocalDate.of(year, month, 1);
+        return buildMonthlyCost(resource, projectId, monthStart, monthStart.format(MONTH_YEAR));
+    }
+
+    /**
+     * Quarterly cost: pass {@code resourceId} for a single resource's summary, or {@code
+     * projectId} for the project dashboard (one summary per active resource).
+     */
+    @Transactional(readOnly = true)
+    public List<ResourceCostSummary> quarterlyCostReport(String projectId, String resourceId, int year, int quarter) {
+        if (quarter < 1 || quarter > 4) {
+            throw new BadRequestException("quarter must be between 1 and 4");
+        }
+        List<Integer> months = List.of(quarter * 3 - 2, quarter * 3 - 1, quarter * 3);
+        return costSummaryReport(projectId, resourceId, year, months, "Q" + quarter + " " + year);
+    }
+
+    /**
+     * Yearly cost: pass {@code resourceId} for a single resource's summary, or {@code projectId}
+     * for the project dashboard (one summary per active resource).
+     */
+    @Transactional(readOnly = true)
+    public List<ResourceCostSummary> yearlyCostReport(String projectId, String resourceId, int year) {
+        if (year < 1970 || year > 9999) {
+            throw new BadRequestException("year must be between 1970 and 9999");
+        }
+        List<Integer> months = List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+        return costSummaryReport(projectId, resourceId, year, months, String.valueOf(year));
+    }
+
+    private List<ResourceCostSummary> costSummaryReport(
+            String projectId, String resourceId, int year, List<Integer> months, String periodLabel) {
+        if (resourceId != null && !resourceId.isBlank()) {
+            MasterResource resource = masterResourceRepository
+                    .findByResId(resourceId)
+                    .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
+            String resolvedProjectId = projectId != null && !projectId.isBlank()
+                    ? projectId
+                    : projectResourceRepository
+                            .findByResourceIdAndActiveTrue(resource.getId())
+                            .map(ProjectResource::getProjectId)
+                            .orElse(null);
+            return List.of(buildCostSummary(resource, resolvedProjectId, year, months, periodLabel));
+        }
+        if (projectId == null || projectId.isBlank()) {
+            throw new BadRequestException("projectId or resourceId is required");
+        }
+        return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+                .map(ProjectResource::getResource)
+                .map(resource -> buildCostSummary(resource, projectId, year, months, periodLabel))
+                .toList();
+    }
+
+    private ResourceCostSummary buildCostSummary(
+            MasterResource resource, String projectId, int year, List<Integer> months, String periodLabel) {
+        List<MonthlyResourceCost> monthly = months.stream()
+                .map(month -> {
+                    LocalDate monthStart = LocalDate.of(year, month, 1);
+                    return buildMonthlyCost(resource, projectId, monthStart, monthStart.format(MONTH_YEAR));
+                })
+                .toList();
+        double totalCost = round2(monthly.stream().mapToDouble(MonthlyResourceCost::cost).sum());
+        return new ResourceCostSummary(resource.getResId(), resource.getName(), projectId, periodLabel, totalCost, monthly);
+    }
+
+    private MonthlyResourceCost buildMonthlyCost(
+            MasterResource resource, String projectId, LocalDate monthStart, String periodLabel) {
+        LocalDate monthEnd = monthStart.withDayOfMonth(monthStart.lengthOfMonth());
+        AttendanceReportSummary attendance = buildSummary(resource, projectId, monthStart, monthEnd, periodLabel);
+
+        ProjectResource assignment = projectId == null
+                ? null
+                : projectResourceRepository
+                        .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), projectId)
+                        .orElse(null);
+        String rateYear = assignment != null ? assignment.getRateYear() : null;
+        Double monthlyRate = (assignment != null && rateYear != null)
+                ? assignment.getRateCardByYear().get(rateYear)
+                : null;
+        double rate = monthlyRate != null ? monthlyRate : 0d;
+
+        int relaxationDaysApplied =
+                relaxationDaysAppliedToMonth(resource, projectId, monthStart, attendance.absentDays());
+        int effectivePresentDays =
+                Math.min(attendance.workingDays(), attendance.presentDays() + relaxationDaysApplied);
+        double cost = (monthlyRate != null && attendance.workingDays() > 0)
+                ? round2(monthlyRate * effectivePresentDays / attendance.workingDays())
+                : 0d;
+
+        return new MonthlyResourceCost(
+                resource.getResId(),
+                resource.getName(),
+                projectId,
+                rateYear,
+                periodLabel,
+                attendance.workingDays(),
+                attendance.presentDays(),
+                relaxationDaysApplied,
+                attendance.attendancePercentage(),
+                rate,
+                cost);
+    }
+
+    /**
+     * This month's share of its quarter's recorded {@link LeaveRelaxation#getRelaxationDays()},
+     * via sequential fill: starting from the quarter's earliest month, each month absorbs
+     * relaxation days up to its own absent-day count before any remainder spills into the next
+     * month. Relaxation is recorded per quarter, not per day, so this is a deterministic way to
+     * spread it across months such that monthly costs sum exactly to the quarterly total.
+     */
+    private int relaxationDaysAppliedToMonth(
+            MasterResource resource, String projectId, LocalDate monthStart, int currentMonthAbsentDays) {
+        if (projectId == null) {
+            return 0;
+        }
+        int year = monthStart.getYear();
+        int month = monthStart.getMonthValue();
+        int quarter = (month - 1) / 3 + 1;
+
+        LeaveRelaxation relaxation = leaveRelaxationRepository
+                .findByResource_ResIdAndProjectIdAndYearAndQuarter(resource.getResId(), projectId, year, quarter)
+                .orElse(null);
+        if (relaxation == null || relaxation.getRelaxationDays() <= 0) {
+            return 0;
+        }
+
+        int remaining = relaxation.getRelaxationDays();
+        int firstMonthOfQuarter = quarter * 3 - 2;
+        int lastMonthOfQuarter = quarter * 3;
+        for (int m = firstMonthOfQuarter; m <= lastMonthOfQuarter; m++) {
+            int absentThisMonth;
+            if (m == month) {
+                absentThisMonth = currentMonthAbsentDays;
+            } else {
+                LocalDate ms = LocalDate.of(year, m, 1);
+                LocalDate me = ms.withDayOfMonth(ms.lengthOfMonth());
+                absentThisMonth = countAbsentDays(resource.getId(), ms, me);
+            }
+            int applied = Math.min(remaining, absentThisMonth);
+            if (m == month) {
+                return applied;
+            }
+            remaining -= applied;
+        }
+        return 0;
+    }
+
+    private int countAbsentDays(Long resourceId, LocalDate start, LocalDate end) {
+        return (int) attendanceRepository.findByResourceIdAndAttendanceDateBetween(resourceId, start, end).stream()
+                .filter(a -> a.getStatus() == AttendanceStatus.A)
+                .count();
+    }
+
+    private double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     // ------------------------------------------------------------------
