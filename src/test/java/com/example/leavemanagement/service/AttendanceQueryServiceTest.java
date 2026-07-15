@@ -14,15 +14,19 @@ import com.example.leavemanagement.dto.AttendanceReportSummary;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
+import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
+import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
+import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.exception.AttendanceValidationException;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.AttendanceRepository;
+import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
@@ -65,6 +69,9 @@ class AttendanceQueryServiceTest {
     @Mock
     private LeavePolicyClient leavePolicyClient;
 
+    @Mock
+    private LeaveRelaxationRepository leaveRelaxationRepository;
+
     // Real engine — the quarterly-settlement path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -74,7 +81,7 @@ class AttendanceQueryServiceTest {
     void setUp() {
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, policy, masterResourceRepository,
-                projectResourceRepository, projectConfigRepository, leavePolicyClient);
+                projectResourceRepository, projectConfigRepository, leavePolicyClient, leaveRelaxationRepository);
     }
 
     private MultipartFile anyFile() {
@@ -321,6 +328,213 @@ class AttendanceQueryServiceTest {
 
         assertThat(report).hasSize(1);
         assertThat(report.get(0).period()).isEqualTo("Q3 2026");
+    }
+
+    // ------------------------------------------------------------------
+    // Resource cost calculator
+    // ------------------------------------------------------------------
+
+    @Test
+    void employeeMonthlyCostMatchesWorkedExample() {
+        // July 2026: 31 days, 8 weekend days -> 23 working days, no holiday.
+        // 22 present, 1 absent. Rate card Year-3 = 88,200 -> cost = 88200 * 22/23 = 84365.22.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
+        assignment.setRateYear("Year-3");
+        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+
+        List<Attendance> rows = new java.util.ArrayList<>();
+        boolean markedAbsent = false;
+        for (LocalDate date = LocalDate.of(2026, 7, 1); !date.isAfter(LocalDate.of(2026, 7, 31));
+                date = date.plusDays(1)) {
+            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            AttendanceStatus status = !markedAbsent ? AttendanceStatus.A : AttendanceStatus.P;
+            markedAbsent = true;
+            rows.add(new Attendance(resource, "P1", "M1", date, status));
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
+                .thenReturn(rows);
+
+        MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
+
+        assertThat(cost.workingDays()).isEqualTo(23);
+        assertThat(cost.presentDays()).isEqualTo(22);
+        assertThat(cost.rateYear()).isEqualTo("Year-3");
+        assertThat(cost.monthlyRate()).isEqualTo(88200.0);
+        assertThat(cost.cost()).isEqualTo(84365.22);
+    }
+
+    @Test
+    void monthlyCostIsZeroWhenResourceHasNoRateYearSet() {
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Dev", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByProjectIdAndActiveTrue("P1")).thenReturn(List.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
+                .thenReturn(List.of());
+
+        List<MonthlyResourceCost> report = service.monthlyCostReport("P1", 2026, 7);
+
+        assertThat(report).hasSize(1);
+        assertThat(report.get(0).rateYear()).isNull();
+        assertThat(report.get(0).monthlyRate()).isZero();
+        assertThat(report.get(0).cost()).isZero();
+    }
+
+    @Test
+    void quarterlyCostReportSumsThreeMonthsComputedSeparately() {
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
+        assignment.setRateYear("Year-3");
+        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
+                .thenReturn(List.of());
+
+        List<ResourceCostSummary> report = service.quarterlyCostReport(null, "E1", 2026, 3);
+
+        assertThat(report).hasSize(1);
+        ResourceCostSummary summary = report.get(0);
+        assertThat(summary.period()).isEqualTo("Q3 2026");
+        assertThat(summary.monthlyBreakdown()).hasSize(3);
+        // No attendance rows -> 0 present days every month -> total cost 0.
+        assertThat(summary.totalCost()).isZero();
+    }
+
+    @Test
+    void quarterlyCostReportRequiresProjectIdOrResourceId() {
+        assertThatThrownBy(() -> service.quarterlyCostReport(null, null, 2026, 3))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    @Test
+    void relaxationReducesCostPenaltyWithinTheSameMonth() {
+        // July 2026: 23 working days, 3 absent (20 present). Quarterly relaxation = 2 days;
+        // July is the quarter's first month, so it absorbs min(2, 3) = 2 relaxation days.
+        // Effective present = 20 + 2 = 22 -> cost = 88200 * 22/23 = 84365.22.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
+        assignment.setRateYear("Year-3");
+        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+
+        List<Attendance> rows = new java.util.ArrayList<>();
+        int absentMarked = 0;
+        for (LocalDate date = LocalDate.of(2026, 7, 1); !date.isAfter(LocalDate.of(2026, 7, 31));
+                date = date.plusDays(1)) {
+            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            AttendanceStatus status = absentMarked < 3 ? AttendanceStatus.A : AttendanceStatus.P;
+            absentMarked++;
+            rows.add(new Attendance(resource, "P1", "M1", date, status));
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
+                .thenReturn(rows);
+
+        LeaveRelaxation relaxation = new LeaveRelaxation(resource, "P1", 2026, 3);
+        relaxation.setRelaxationDays(2);
+        when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 3))
+                .thenReturn(Optional.of(relaxation));
+
+        MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
+
+        assertThat(cost.workingDays()).isEqualTo(23);
+        assertThat(cost.presentDays()).isEqualTo(20);
+        assertThat(cost.relaxationDaysApplied()).isEqualTo(2);
+        assertThat(cost.cost()).isEqualTo(84365.22);
+    }
+
+    @Test
+    void relaxationSpillsIntoNextMonthWhenPriorMonthAbsencesAreFewer() {
+        // Quarter Q3 2026, relaxationDays=3. July has only 1 absence -> July absorbs 1, leaving
+        // 2 to spill into August. August has 21 working days, 2 absent (19 present) -> August
+        // absorbs min(2, 2) = 2, fully covering its absences: effective present = 21 = workingDays,
+        // so cost = full monthly rate (88200) even though actual presentDays is only 19.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
+        assignment.setRateYear("Year-3");
+        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+
+        List<Attendance> julyRows = new java.util.ArrayList<>();
+        int julyAbsentMarked = 0;
+        for (LocalDate date = LocalDate.of(2026, 7, 1); !date.isAfter(LocalDate.of(2026, 7, 31));
+                date = date.plusDays(1)) {
+            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            AttendanceStatus status = julyAbsentMarked < 1 ? AttendanceStatus.A : AttendanceStatus.P;
+            julyAbsentMarked++;
+            julyRows.add(new Attendance(resource, "P1", "M1", date, status));
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
+                .thenReturn(julyRows);
+
+        List<Attendance> augustRows = new java.util.ArrayList<>();
+        int augustAbsentMarked = 0;
+        for (LocalDate date = LocalDate.of(2026, 8, 1); !date.isAfter(LocalDate.of(2026, 8, 31));
+                date = date.plusDays(1)) {
+            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            AttendanceStatus status = augustAbsentMarked < 2 ? AttendanceStatus.A : AttendanceStatus.P;
+            augustAbsentMarked++;
+            augustRows.add(new Attendance(resource, "P1", "M1", date, status));
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        1L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
+                .thenReturn(augustRows);
+
+        LeaveRelaxation relaxation = new LeaveRelaxation(resource, "P1", 2026, 3);
+        relaxation.setRelaxationDays(3);
+        when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 3))
+                .thenReturn(Optional.of(relaxation));
+
+        MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 8);
+
+        assertThat(cost.workingDays()).isEqualTo(21);
+        assertThat(cost.presentDays()).isEqualTo(19);
+        assertThat(cost.relaxationDaysApplied()).isEqualTo(2);
+        assertThat(cost.cost()).isEqualTo(88200.0);
     }
 
     // ------------------------------------------------------------------
