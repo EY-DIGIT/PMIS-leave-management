@@ -104,4 +104,42 @@ class QuarterLeavePolicyTest {
         assertThat(calc.permissibleLeave()).isZero();
         assertThat(calc.totalUnpaidDays()).isZero();
     }
+
+    @Test
+    void carriedForwardDaysAddToThisQuartersAllowance() {
+        // 4 leave days taken, base allowance 6, 2 carried in from last quarter -> permissible 8,
+        // all 4 leave days paid, nothing unpaid, 4 days lapse (8 allowed - 4 used).
+        Set<LocalDate> absent = Set.of(
+                LocalDate.of(2024, 4, 1), LocalDate.of(2024, 4, 2), LocalDate.of(2024, 4, 3),
+                LocalDate.of(2024, 4, 4));
+
+        QuarterLeaveCalculation calc = policy.compute(
+                Q_START, Q_END, null, absent, Set.of(), QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE, 2);
+
+        assertThat(calc.carriedForwardLeave()).isEqualTo(2);
+        assertThat(calc.permissibleLeave()).isEqualTo(8); // 6 base + 2 carried in
+        assertThat(calc.paidLeaveDays()).isEqualTo(4);
+        assertThat(calc.unpaidLeaveDays()).isZero();
+        assertThat(calc.lapsedLeaveDays()).isEqualTo(4);
+    }
+
+    @Test
+    void negativeCarriedForwardDaysAreTreatedAsZero() {
+        QuarterLeaveCalculation calc = policy.compute(
+                Q_START, Q_END, null, Set.of(), Set.of(), QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE, -3);
+
+        assertThat(calc.carriedForwardLeave()).isZero();
+        assertThat(calc.permissibleLeave()).isEqualTo(6);
+    }
+
+    @Test
+    void defaultOverloadsCarryNoLeaveForward() {
+        QuarterLeaveCalculation calc = policy.compute(Q_START, Q_END, null, Set.of(), Set.of());
+        assertThat(calc.carriedForwardLeave()).isZero();
+
+        QuarterLeaveCalculation calcWithMax =
+                policy.compute(Q_START, Q_END, null, Set.of(), Set.of(), 4);
+        assertThat(calcWithMax.carriedForwardLeave()).isZero();
+        assertThat(calcWithMax.permissibleLeave()).isEqualTo(4);
+    }
 }
