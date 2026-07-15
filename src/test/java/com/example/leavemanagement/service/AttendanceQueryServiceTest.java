@@ -118,7 +118,7 @@ class AttendanceQueryServiceTest {
                                 LocalDate.of(2026, 7, 2), 200)))); // half day
         stubActiveResource("E1", "P1", 1L);
         when(leavePolicyClient.getLeavePolicy("P1"))
-                .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true)));
+                .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true, false, true, false, true)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         AttendanceUploadResult result = service.upload(
@@ -144,7 +144,7 @@ class AttendanceQueryServiceTest {
                         "E1", "Asha", "Dev", Set.of(), Map.of(LocalDate.of(2026, 7, 3), 480))));
         stubActiveResource("E1", "P1", 1L);
         when(leavePolicyClient.getLeavePolicy("P1"))
-                .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true)));
+                .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true, false, true, false, true)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
                 .thenReturn(List.of(new com.example.leavemanagement.entity.PublicHoliday(
                         LocalDate.of(2026, 7, 6), "Test Holiday")));
@@ -222,7 +222,7 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
         when(leavePolicyClient.getLeavePolicy("P1"))
-                .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true)));
+                .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true, false, true, false, true)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         service.upload("P1", "M1", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1), "Year-2", anyFile());
@@ -361,6 +361,42 @@ class AttendanceQueryServiceTest {
         assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(6);
         assertThat(settlement.calculation().unpaidLeaveDays()).isEqualTo(1);
         assertThat(settlement.calculation().totalUnpaidDays()).isEqualTo(1);
+    }
+
+    @Test
+    void quarterlySettlementCarriesForwardUnusedLeaveWhenPolicyAllowsIt() {
+        // Q1 2024 (Jan-Mar): 2 absences -> 4 days lapse (6 allowed - 2 used).
+        // Q2 2024 (Apr-Jun): 4 absences, all paid once the 4-day carry-in is added to the base 6.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Resource A");
+        setId(resource, 1L);
+        List<Attendance> q2Rows = List.of(
+                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 3), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 4), AttendanceStatus.A));
+        List<Attendance> q1Rows = List.of(
+                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 1, 8), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 1, 9), AttendanceStatus.A));
+        when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
+                .thenReturn(q2Rows);
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        1L, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 3, 31)))
+                .thenReturn(q1Rows);
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Dev", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(leavePolicyClient.getLeavePolicy("P1"))
+                .thenReturn(Optional.of(new LeavePolicyResponse(
+                        4, 8, false, false, true, true, 6, "QUARTERLY", true, true, true, false, true)));
+
+        QuarterLeaveReport report = service.quarterlySettlement(2024, 2);
+
+        var settlement = report.resources().get(0);
+        assertThat(settlement.calculation().carriedForwardLeave()).isEqualTo(4);
+        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(10); // 6 base + 4 carried in
+        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(4);
+        assertThat(settlement.calculation().unpaidLeaveDays()).isZero();
     }
 
     @Test

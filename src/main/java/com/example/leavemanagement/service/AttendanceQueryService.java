@@ -169,11 +169,8 @@ public class AttendanceQueryService {
      * leavesPerFrequencyCount}, falls back to {@link ProjectConfig}, then to {@link
      * QuarterLeavePolicy#MAX_PERMISSIBLE_LEAVE}.
      */
-    private int resolveMaxLeaves(String projectId) {
-        Integer fromPolicy = leavePolicyClient
-                .getLeavePolicy(projectId)
-                .map(LeavePolicyResponse::leavesPerFrequencyCount)
-                .orElse(null);
+    private int resolveMaxLeaves(String projectId, Optional<LeavePolicyResponse> leavePolicy) {
+        Integer fromPolicy = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
         if (fromPolicy != null) {
             return fromPolicy;
         }
@@ -181,6 +178,45 @@ public class AttendanceQueryService {
                 .findById(projectId)
                 .map(ProjectConfig::getMaxLeavesPerPeriod)
                 .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
+    }
+
+    /**
+     * Unused permissible leave from the previous quarter, to add into this quarter's allowance —
+     * only when the project's leave policy has {@code carryForwardAllowed=true}. Only one quarter
+     * of lookback: a prior quarter's own carry-in isn't chained further back.
+     */
+    private int resolveCarriedForwardDays(
+            MasterResource resource,
+            String projectId,
+            int year,
+            int quarter,
+            LocalDate joiningDate,
+            int maxLeaves,
+            boolean carryForwardAllowed) {
+        if (!carryForwardAllowed) {
+            return 0;
+        }
+        int prevQuarter = quarter == 1 ? 4 : quarter - 1;
+        int prevYear = quarter == 1 ? year - 1 : year;
+        List<Integer> prevMonths = List.of(prevQuarter * 3 - 2, prevQuarter * 3 - 1, prevQuarter * 3);
+        LocalDate prevStart = LocalDate.of(prevYear, prevMonths.get(0), 1);
+        LocalDate prevEnd = LocalDate.of(prevYear, prevMonths.get(2), 1)
+                .withDayOfMonth(LocalDate.of(prevYear, prevMonths.get(2), 1).lengthOfMonth());
+        if (joiningDate != null && joiningDate.isAfter(prevEnd)) {
+            return 0; // resource didn't exist yet in the previous quarter
+        }
+
+        Set<LocalDate> prevHolidays = holidaysBetween(prevStart, prevEnd);
+        Set<LocalDate> prevAbsentDates =
+                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), prevStart, prevEnd)
+                        .stream()
+                        .filter(a -> a.getStatus() == AttendanceStatus.A)
+                        .map(Attendance::getAttendanceDate)
+                        .collect(Collectors.toSet());
+
+        QuarterLeaveCalculation prevCalc =
+                policy.compute(prevStart, prevEnd, joiningDate, prevAbsentDates, prevHolidays, maxLeaves);
+        return prevCalc.lapsedLeaveDays();
     }
 
     private boolean isWeekend(LocalDate date) {
@@ -445,10 +481,15 @@ public class AttendanceQueryService {
                     .map(ProjectResource::getAssignmentStartDate)
                     .orElse(resource.getDateOfJoining());
 
-            int maxLeaves = resolveMaxLeaves(resourceProjectId);
+            Optional<LeavePolicyResponse> leavePolicy = leavePolicyClient.getLeavePolicy(resourceProjectId);
+            int maxLeaves = resolveMaxLeaves(resourceProjectId, leavePolicy);
+            boolean carryForwardAllowed =
+                    leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
+            int carriedForwardDays = resolveCarriedForwardDays(
+                    resource, resourceProjectId, year, quarter, joiningDate, maxLeaves, carryForwardAllowed);
 
-            QuarterLeaveCalculation calculation =
-                    policy.compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves);
+            QuarterLeaveCalculation calculation = policy.compute(
+                    quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves, carriedForwardDays);
 
             settlements.add(
                     new ResourceQuarterSettlement(resource.getResId(), resource.getName(), joiningDate, calculation));

@@ -14,8 +14,8 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name = "leave-policy-service.mock", havingValue = "true")
 public class StubLeavePolicyClient implements LeavePolicyClient {
 
-    private static final LeavePolicyResponse SAMPLE_POLICY =
-            new LeavePolicyResponse(4, 8, false, false, true, true, 2, "MONTHLY", true);
+    private static final LeavePolicyResponse SAMPLE_POLICY = new LeavePolicyResponse(
+            4, 8, false, false, true, true, 2, "MONTHLY", true, false, true, false, true);
 
     @Override
     public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {

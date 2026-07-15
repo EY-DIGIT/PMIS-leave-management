@@ -20,7 +20,9 @@ import org.springframework.stereotype.Component;
  *
  * <ul>
  *   <li>5.24.1.a — up to {@value #MAX_PERMISSIBLE_LEAVE} paid leave days per quarter; the rest are
- *       unpaid. Unused days lapse (no carry-forward).
+ *       unpaid. By default unused days lapse (no carry-forward); a project whose leave policy
+ *       allows carry-forward can pass the previous quarter's {@code lapsedLeaveDays} in as
+ *       {@code carriedForwardDays} to add it to this quarter's allowance instead.
  *   <li>5.24.1.a.iii — a mid-quarter joiner's allowance is pro-rated by calendar days.
  *   <li>5.24.1.b — sandwich leave: a weekend/holiday is charged as unpaid when the
  *       absences bracketing it are both unpaid leave (or it trails an open unpaid
@@ -47,47 +49,7 @@ public class QuarterLeavePolicy {
             LocalDate joiningDate,
             Set<LocalDate> absentDates,
             Set<LocalDate> holidays) {
-
-        Set<LocalDate> holidaySet = holidays == null ? Set.of() : holidays;
-        LocalDate effectiveStart =
-                (joiningDate != null && joiningDate.isAfter(quarterStart)) ? joiningDate : quarterStart;
-
-        // Joined after the quarter ended -> nothing applies.
-        if (effectiveStart.isAfter(quarterEnd)) {
-            return new QuarterLeaveCalculation(0, 0, 0, 0, 0, 0, 0, List.of(), List.of(), List.of());
-        }
-
-        int permissible = permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate);
-
-        List<LocalDate> leaveDates = absentDates.stream()
-                .filter(d -> !d.isBefore(effectiveStart) && !d.isAfter(quarterEnd))
-                .filter(d -> isWorkingDay(d, holidaySet))
-                .sorted()
-                .toList();
-
-        int paidCount = Math.min(leaveDates.size(), permissible);
-        List<LocalDate> paidDates = List.copyOf(leaveDates.subList(0, paidCount));
-        List<LocalDate> unpaidDates = List.copyOf(leaveDates.subList(paidCount, leaveDates.size()));
-        Set<LocalDate> unpaidSet = new HashSet<>(unpaidDates);
-
-        List<LocalDate> sandwichDates =
-                sandwichDates(effectiveStart, quarterEnd, holidaySet, unpaidSet);
-
-        int unpaidLeave = unpaidDates.size();
-        int sandwich = sandwichDates.size();
-        int lapsed = Math.max(0, permissible - paidCount);
-
-        return new QuarterLeaveCalculation(
-                permissible,
-                leaveDates.size(),
-                paidCount,
-                unpaidLeave,
-                sandwich,
-                unpaidLeave + sandwich,
-                lapsed,
-                paidDates,
-                unpaidDates,
-                sandwichDates);
+        return compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, MAX_PERMISSIBLE_LEAVE, 0);
     }
 
     public QuarterLeaveCalculation compute(
@@ -97,16 +59,36 @@ public class QuarterLeavePolicy {
             Set<LocalDate> absentDates,
             Set<LocalDate> holidays,
             int maxLeavesPerPeriod) {
+        return compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeavesPerPeriod, 0);
+    }
+
+    /**
+     * @param carriedForwardDays unused permissible leave brought in from the previous quarter —
+     *     added directly to this quarter's base allowance, not prorated. Pass 0 (or use one of the
+     *     other overloads) when the project's leave policy doesn't allow carry-forward.
+     */
+    public QuarterLeaveCalculation compute(
+            LocalDate quarterStart,
+            LocalDate quarterEnd,
+            LocalDate joiningDate,
+            Set<LocalDate> absentDates,
+            Set<LocalDate> holidays,
+            int maxLeavesPerPeriod,
+            int carriedForwardDays) {
 
         Set<LocalDate> holidaySet = holidays == null ? Set.of() : holidays;
         LocalDate effectiveStart =
                 (joiningDate != null && joiningDate.isAfter(quarterStart)) ? joiningDate : quarterStart;
 
+        // Joined after the quarter ended -> nothing applies.
         if (effectiveStart.isAfter(quarterEnd)) {
-            return new QuarterLeaveCalculation(0, 0, 0, 0, 0, 0, 0, List.of(), List.of(), List.of());
+            return new QuarterLeaveCalculation(0, 0, 0, 0, 0, 0, 0, 0, List.of(), List.of(), List.of());
         }
 
-        int permissible = permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, maxLeavesPerPeriod);
+        int basePermissible =
+                permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, maxLeavesPerPeriod);
+        int carriedForward = Math.max(0, carriedForwardDays);
+        int permissible = basePermissible + carriedForward;
 
         List<LocalDate> leaveDates = absentDates.stream()
                 .filter(d -> !d.isBefore(effectiveStart) && !d.isAfter(quarterEnd))
@@ -128,6 +110,7 @@ public class QuarterLeavePolicy {
 
         return new QuarterLeaveCalculation(
                 permissible,
+                carriedForward,
                 leaveDates.size(),
                 paidCount,
                 unpaidLeave,

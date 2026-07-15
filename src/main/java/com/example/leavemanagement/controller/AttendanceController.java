@@ -2,11 +2,15 @@ package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.AttendanceReportSummary;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
+import com.example.leavemanagement.dto.EmployeeLeaveDetail;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
+import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
 import com.example.leavemanagement.service.AttendanceQueryService;
+import com.example.leavemanagement.service.LeaveReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -15,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -27,9 +32,11 @@ import org.springframework.web.multipart.MultipartFile;
 public class AttendanceController {
 
     private final AttendanceQueryService attendanceQueryService;
+    private final LeaveReportService leaveReportService;
 
-    public AttendanceController(AttendanceQueryService attendanceQueryService) {
+    public AttendanceController(AttendanceQueryService attendanceQueryService, LeaveReportService leaveReportService) {
         this.attendanceQueryService = attendanceQueryService;
+        this.leaveReportService = leaveReportService;
     }
 
     /**
@@ -147,5 +154,22 @@ public class AttendanceController {
             @Parameter(description = "Restrict to this project id") @RequestParam(required = false)
                     String projectId) {
         return attendanceQueryService.quarterlySettlement(year, quarter, projectId);
+    }
+
+    /**
+     * Records UIDAI's final leave-relaxation decision for one resource's quarter.
+     * POST /api/attendance/quarterly-relaxation
+     */
+    @Operation(
+            summary = "Record a quarterly leave-relaxation decision",
+            description = "The employee's relaxation request/discussion happens entirely outside the system — "
+                    + "this endpoint only records UIDAI's final decision. relaxationDays converts that many "
+                    + "days from unpaid leave into a separate 'relaxation leave' category; paid leave is never "
+                    + "changed. Must be between 0 and the quarter's unpaid leave days. Re-recording a decision "
+                    + "for the same resource/project/year/quarter overwrites the previous one. Returns the "
+                    + "recalculated quarterly settlement.")
+    @PostMapping("/quarterly-relaxation")
+    public EmployeeLeaveDetail quarterlyRelaxation(@Valid @RequestBody QuarterlyRelaxationRequest request) {
+        return leaveReportService.applyQuarterlyRelaxation(request);
     }
 }
