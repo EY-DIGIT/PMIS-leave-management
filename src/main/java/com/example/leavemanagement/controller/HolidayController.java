@@ -64,15 +64,17 @@ public class HolidayController {
     @Operation(
             summary = "Upload public holidays for a year (Excel file)",
             description = "Upload an .xlsx/.xls file whose first sheet has a header row followed by rows of "
-                    + "[date, name] (column A = date as an Excel date or yyyy-MM-dd text, column B = name). "
-                    + "Every date must fall inside 'year' (else 400). "
-                    + "Returns 201 with the full sorted holiday list for the year.")
+                    + "[S.No, Holiday, Date, Day] — column A = serial number (ignored), column B = holiday "
+                    + "name, column C = the date without a year (e.g. \"26 January\"; resolved against "
+                    + "'year'), column D = day of week (e.g. \"Monday\", optional — cross-checked against the "
+                    + "actual day of week for column C's date if given). Every date must fall inside 'year' "
+                    + "(else 400). Returns 201 with the full sorted holiday list for the year.")
     @PostMapping(value = "/holidays", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<List<HolidayItem>> uploadHolidaysFromExcel(
             @Parameter(description = "Year the holidays belong to", example = "2026") @RequestParam("year") int year,
-            @Parameter(description = "Excel file (.xlsx/.xls) with [date, name] rows")
+            @Parameter(description = "Excel file (.xlsx/.xls) with [S.No, Holiday, Date, Day] rows")
                     @RequestPart("file") MultipartFile file) {
-        List<HolidayItem> items = excelParser.parse(file);
+        List<HolidayItem> items = excelParser.parse(file, year);
         List<HolidayItem> saved = holidayService.uploadHolidays(new HolidayUploadRequest(year, items));
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
