@@ -66,10 +66,11 @@ class LeaveReportServiceTest {
 
     @BeforeEach
     void setUp() {
+        QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
+                attendanceRepository, publicHolidayRepository, projectConfigRepository, leavePolicyClient, policy);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
-                projectConfigRepository, attendanceRepository, publicHolidayRepository,
-                leaveRelaxationRepository, policy, leavePolicyClient);
+                projectConfigRepository, attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver);
     }
 
     private void setId(MasterResource resource, long id) {

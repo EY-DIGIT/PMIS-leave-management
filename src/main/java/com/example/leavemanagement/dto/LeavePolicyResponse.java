@@ -13,8 +13,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 public record LeavePolicyResponse(
         Integer halfDay,
         Integer fullDay,
-        Boolean saturdayWorking,
-        Boolean sundayWorking,
+        String saturdayWorking,
+        String sundayWorking,
         Boolean attendanceCaptured,
         Boolean sandwichLeaveApplied,
         Integer leavesPerFrequencyCount,
