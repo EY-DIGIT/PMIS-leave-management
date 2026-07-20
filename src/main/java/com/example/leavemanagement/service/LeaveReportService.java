@@ -1,21 +1,17 @@
 package com.example.leavemanagement.service;
 
-import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
-import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.LeaveReportEntry;
 import com.example.leavemanagement.dto.LeaveReportSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
-import com.example.leavemanagement.dto.ResourceQuarterSettlement;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.ProjectResource;
-import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.AttendanceRepository;
@@ -23,7 +19,6 @@ import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
-import com.example.leavemanagement.repository.PublicHolidayRepository;
 import com.example.leavemanagement.security.CurrentUser;
 import com.example.leavemanagement.security.CurrentUserContext;
 import java.time.LocalDate;
@@ -43,10 +38,8 @@ public class LeaveReportService {
     private final ProjectResourceRepository projectResourceRepository;
     private final ProjectConfigRepository projectConfigRepository;
     private final AttendanceRepository attendanceRepository;
-    private final PublicHolidayRepository publicHolidayRepository;
     private final LeaveRelaxationRepository leaveRelaxationRepository;
-    private final QuarterLeavePolicy policy;
-    private final LeavePolicyClient leavePolicyClient;
+    private final QuarterLeaveResolver quarterLeaveResolver;
 
     public LeaveReportService(
             AttendanceQueryService attendanceQueryService,
@@ -54,19 +47,15 @@ public class LeaveReportService {
             ProjectResourceRepository projectResourceRepository,
             ProjectConfigRepository projectConfigRepository,
             AttendanceRepository attendanceRepository,
-            PublicHolidayRepository publicHolidayRepository,
             LeaveRelaxationRepository leaveRelaxationRepository,
-            QuarterLeavePolicy policy,
-            LeavePolicyClient leavePolicyClient) {
+            QuarterLeaveResolver quarterLeaveResolver) {
         this.attendanceQueryService = attendanceQueryService;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
         this.projectConfigRepository = projectConfigRepository;
         this.attendanceRepository = attendanceRepository;
-        this.publicHolidayRepository = publicHolidayRepository;
         this.leaveRelaxationRepository = leaveRelaxationRepository;
-        this.policy = policy;
-        this.leavePolicyClient = leavePolicyClient;
+        this.quarterLeaveResolver = quarterLeaveResolver;
     }
 
     /** The resource's active project assignment, resolved by attendanceId (res_id). */
@@ -144,7 +133,10 @@ public class LeaveReportService {
         relaxation.setRemarks(request.remarks());
         relaxation.setApprovedBy(currentUserIdentifier());
         relaxation.setApprovedAt(LocalDateTime.now());
-        leaveRelaxationRepository.save(relaxation);
+        // Always use the entity returned by save() — JPA merge can return a different managed
+        // instance than the local variable, so discarding the return value risks using a stale
+        // (pre-update) relaxationDays when building the response, which produces reversed values.
+        relaxation = leaveRelaxationRepository.save(relaxation);
 
         return applyRelaxation(raw, relaxation);
     }
@@ -162,6 +154,9 @@ public class LeaveReportService {
     }
 
     private EmployeeLeaveDetail applyRelaxation(EmployeeLeaveDetail raw, LeaveRelaxation relaxation) {
+        // Cap relaxationDays to the base unpaid leave in case attendance was re-uploaded after the
+        // relaxation record was first saved (prevents negative unpaidLeave in the response).
+        int relaxDays = Math.min(relaxation.getRelaxationDays(), raw.unpaidLeave());
         return new EmployeeLeaveDetail(
                 raw.attendanceId(),
                 raw.employeeName(),
@@ -176,10 +171,10 @@ public class LeaveReportService {
                 raw.carriedForwardLeave(),
                 raw.leaveTaken(),
                 raw.paidLeave(),
-                Math.max(0, raw.unpaidLeave() - relaxation.getRelaxationDays()),
-                relaxation.getRelaxationDays(),
+                raw.unpaidLeave() - relaxDays,
+                relaxDays,
                 raw.sandwichDays(),
-                Math.max(0, raw.totalUnpaidDays() - relaxation.getRelaxationDays()),
+                Math.max(0, raw.totalUnpaidDays() - relaxDays),
                 raw.lapsedLeave(),
                 raw.paidLeaveDates(),
                 raw.unpaidLeaveDates(),
@@ -214,12 +209,6 @@ public class LeaveReportService {
                 .map(Attendance::getAttendanceDate)
                 .collect(Collectors.toSet());
 
-        Set<LocalDate> holidays =
-                publicHolidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(quarterStart, quarterEnd)
-                        .stream()
-                        .map(PublicHoliday::getHolidayDate)
-                        .collect(Collectors.toSet());
-
         ProjectResource assignment = resource
                 .flatMap(r -> projectResourceRepository.findByResourceIdAndActiveTrue(r.getId()))
                 .orElse(null);
@@ -239,18 +228,9 @@ public class LeaveReportService {
                 .filter(name -> name != null && !name.isBlank())
                 .orElse(attendanceId);
 
-        Optional<LeavePolicyResponse> leavePolicy = Optional.ofNullable(projectId).flatMap(leavePolicyClient::getLeavePolicy);
-        Integer maxLeavesFromPolicy = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
-        int maxLeaves = maxLeavesFromPolicy != null
-                ? maxLeavesFromPolicy
-                : config != null ? config.getMaxLeavesPerPeriod() : QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE;
-        boolean carryForwardAllowed = leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
-        int carriedForwardDays = (resource.isPresent() && carryForwardAllowed)
-                ? resolveCarriedForwardDays(resource.get(), year, quarter, joiningDate, maxLeaves)
-                : 0;
-
-        QuarterLeaveCalculation calc = policy.compute(
-                quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves, carriedForwardDays);
+        Long resourceId = resource.map(MasterResource::getId).orElse(null);
+        QuarterLeaveCalculation calc =
+                quarterLeaveResolver.calculate(resourceId, projectId, joiningDate, year, quarter, absentDates);
 
         return new EmployeeLeaveDetail(
                 attendanceId,
@@ -274,38 +254,5 @@ public class LeaveReportService {
                 calc.paidLeaveDates(),
                 calc.unpaidLeaveDates(),
                 calc.sandwichDates());
-    }
-
-    /**
-     * Unused permissible leave from the previous quarter, to add into this quarter's allowance —
-     * only called when the project's leave policy has {@code carryForwardAllowed=true}. Only one
-     * quarter of lookback: a prior quarter's own carry-in isn't chained further back.
-     */
-    private int resolveCarriedForwardDays(
-            MasterResource resource, int year, int quarter, LocalDate joiningDate, int maxLeaves) {
-        int prevQuarter = quarter == 1 ? 4 : quarter - 1;
-        int prevYear = quarter == 1 ? year - 1 : year;
-        List<Integer> prevMonths = List.of(prevQuarter * 3 - 2, prevQuarter * 3 - 1, prevQuarter * 3);
-        LocalDate prevStart = LocalDate.of(prevYear, prevMonths.get(0), 1);
-        LocalDate prevEnd = LocalDate.of(prevYear, prevMonths.get(2), 1)
-                .withDayOfMonth(LocalDate.of(prevYear, prevMonths.get(2), 1).lengthOfMonth());
-        if (joiningDate != null && joiningDate.isAfter(prevEnd)) {
-            return 0; // resource didn't exist yet in the previous quarter
-        }
-
-        Set<LocalDate> prevHolidays =
-                publicHolidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(prevStart, prevEnd).stream()
-                        .map(PublicHoliday::getHolidayDate)
-                        .collect(Collectors.toSet());
-        Set<LocalDate> prevAbsentDates =
-                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), prevStart, prevEnd)
-                        .stream()
-                        .filter(a -> a.getStatus() == AttendanceStatus.A)
-                        .map(Attendance::getAttendanceDate)
-                        .collect(Collectors.toSet());
-
-        QuarterLeaveCalculation prevCalc =
-                policy.compute(prevStart, prevEnd, joiningDate, prevAbsentDates, prevHolidays, maxLeaves);
-        return prevCalc.lapsedLeaveDays();
     }
 }

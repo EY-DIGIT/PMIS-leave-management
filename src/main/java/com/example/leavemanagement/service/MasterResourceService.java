@@ -193,8 +193,15 @@ public class MasterResourceService {
         Specification<MasterResource> spec = buildSpecification(resId, name, emailId, joinedFrom, joinedTo);
         List<ResourceResponse> results = new ArrayList<>();
         for (MasterResource resource : repository.findAll(spec)) {
+            // Prefer the active assignment; fall back to the most recent inactive one so inactive
+            // resources are still visible when active=false or active=null.
             ProjectResource assignment =
-                    projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()).orElse(null);
+                    projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()).orElseGet(() ->
+                            projectResourceRepository
+                                    .findByResourceIdOrderByAssignmentStartDateAsc(resource.getId())
+                                    .stream()
+                                    .reduce((first, second) -> second) // last/most-recent
+                                    .orElse(null));
             if (designationType != null
                     && !designationType.isBlank()
                     && (assignment == null || !designationType.equalsIgnoreCase(assignment.getRole()))) {
@@ -205,7 +212,7 @@ public class MasterResourceService {
                     && (assignment == null || !projectId.equals(assignment.getProjectId()))) {
                 continue;
             }
-            if (active != null && (assignment != null) != active) {
+            if (active != null && active != (assignment != null && assignment.isActive())) {
                 continue;
             }
             results.add(buildResponse(resource, assignment));
@@ -236,6 +243,17 @@ public class MasterResourceService {
         if (assignment != null) {
             assignment.setRole(request.designationType());
             assignment.setRateCardByYear(request.rateCardByYear());
+
+            // active=false deactivates the current assignment; lastDate is mandatory and becomes
+            // the inactivation (assignment end) date. active=true/null keeps it active.
+            if (Boolean.FALSE.equals(request.active())) {
+                if (request.lastDate() == null) {
+                    throw new BadRequestException(
+                            "lastDate is required to deactivate a resource — it is the inactivation date.");
+                }
+                assignment.setActive(false);
+                assignment.setAssignmentEndDate(request.lastDate());
+            }
             projectResourceRepository.save(assignment);
         }
         return buildResponse(resource, assignment);
@@ -286,7 +304,7 @@ public class MasterResourceService {
                 a != null ? a.getRole() : null,
                 a != null ? a.getRateCardByYear() : Map.of(),
                 a != null ? a.getRateYear() : null,
-                a != null,
+                a != null && a.isActive(),
                 a != null ? a.getAssignmentStartDate() : null,
                 a != null ? a.getAssignmentEndDate() : null);
     }

@@ -66,10 +66,11 @@ class LeaveReportServiceTest {
 
     @BeforeEach
     void setUp() {
+        QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
+                attendanceRepository, publicHolidayRepository, projectConfigRepository, leavePolicyClient, policy);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
-                projectConfigRepository, attendanceRepository, publicHolidayRepository,
-                leaveRelaxationRepository, policy, leavePolicyClient);
+                projectConfigRepository, attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver);
     }
 
     private void setId(MasterResource resource, long id) {
@@ -118,6 +119,8 @@ class LeaveReportServiceTest {
         stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
         when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 2))
                 .thenReturn(Optional.empty());
+        // save() must return the entity so applyRelaxation can use the persisted state.
+        when(leaveRelaxationRepository.save(any())).thenAnswer(org.mockito.AdditionalAnswers.returnsFirstArg());
 
         QuarterlyRelaxationRequest request =
                 new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 1, "Approved by UIDAI on medical grounds.");

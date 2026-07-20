@@ -20,6 +20,15 @@ public final class CurrentUserContext {
         TOKEN_HOLDER.set(token);
     }
 
+    /**
+     * Stores only the raw bearer token for the current request, independent of authentication.
+     * Used by the always-on token-capture filter so the caller's token can be propagated to
+     * downstream services even when introspection-based auth is disabled.
+     */
+    public static void setToken(String token) {
+        TOKEN_HOLDER.set(token);
+    }
+
     public static CurrentUser get() {
         return HOLDER.get();
     }

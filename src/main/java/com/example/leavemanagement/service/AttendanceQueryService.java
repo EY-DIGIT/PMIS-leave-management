@@ -62,32 +62,32 @@ public class AttendanceQueryService {
     private final AttendanceExcelParser parser;
     private final AttendanceRepository attendanceRepository;
     private final PublicHolidayRepository holidayRepository;
-    private final QuarterLeavePolicy policy;
     private final MasterResourceRepository masterResourceRepository;
     private final ProjectResourceRepository projectResourceRepository;
     private final ProjectConfigRepository projectConfigRepository;
     private final LeavePolicyClient leavePolicyClient;
     private final LeaveRelaxationRepository leaveRelaxationRepository;
+    private final QuarterLeaveResolver quarterLeaveResolver;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
             AttendanceRepository attendanceRepository,
             PublicHolidayRepository holidayRepository,
-            QuarterLeavePolicy policy,
             MasterResourceRepository masterResourceRepository,
             ProjectResourceRepository projectResourceRepository,
             ProjectConfigRepository projectConfigRepository,
             LeavePolicyClient leavePolicyClient,
-            LeaveRelaxationRepository leaveRelaxationRepository) {
+            LeaveRelaxationRepository leaveRelaxationRepository,
+            QuarterLeaveResolver quarterLeaveResolver) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
-        this.policy = policy;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
         this.projectConfigRepository = projectConfigRepository;
         this.leavePolicyClient = leavePolicyClient;
         this.leaveRelaxationRepository = leaveRelaxationRepository;
+        this.quarterLeaveResolver = quarterLeaveResolver;
     }
 
     // ------------------------------------------------------------------
@@ -169,61 +169,6 @@ public class AttendanceQueryService {
                 .findById(projectId)
                 .map(c -> new int[] {c.getFullDayMinutes(), c.getHalfDayMinutes()})
                 .orElse(new int[] {DEFAULT_FULL_DAY_MINUTES, DEFAULT_HALF_DAY_MINUTES});
-    }
-
-    /**
-     * Paid-leave allowance per settlement period: prefers the real leave policy's {@code
-     * leavesPerFrequencyCount}, falls back to {@link ProjectConfig}, then to {@link
-     * QuarterLeavePolicy#MAX_PERMISSIBLE_LEAVE}.
-     */
-    private int resolveMaxLeaves(String projectId, Optional<LeavePolicyResponse> leavePolicy) {
-        Integer fromPolicy = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
-        if (fromPolicy != null) {
-            return fromPolicy;
-        }
-        return projectConfigRepository
-                .findById(projectId)
-                .map(ProjectConfig::getMaxLeavesPerPeriod)
-                .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
-    }
-
-    /**
-     * Unused permissible leave from the previous quarter, to add into this quarter's allowance —
-     * only when the project's leave policy has {@code carryForwardAllowed=true}. Only one quarter
-     * of lookback: a prior quarter's own carry-in isn't chained further back.
-     */
-    private int resolveCarriedForwardDays(
-            MasterResource resource,
-            String projectId,
-            int year,
-            int quarter,
-            LocalDate joiningDate,
-            int maxLeaves,
-            boolean carryForwardAllowed) {
-        if (!carryForwardAllowed) {
-            return 0;
-        }
-        int prevQuarter = quarter == 1 ? 4 : quarter - 1;
-        int prevYear = quarter == 1 ? year - 1 : year;
-        List<Integer> prevMonths = List.of(prevQuarter * 3 - 2, prevQuarter * 3 - 1, prevQuarter * 3);
-        LocalDate prevStart = LocalDate.of(prevYear, prevMonths.get(0), 1);
-        LocalDate prevEnd = LocalDate.of(prevYear, prevMonths.get(2), 1)
-                .withDayOfMonth(LocalDate.of(prevYear, prevMonths.get(2), 1).lengthOfMonth());
-        if (joiningDate != null && joiningDate.isAfter(prevEnd)) {
-            return 0; // resource didn't exist yet in the previous quarter
-        }
-
-        Set<LocalDate> prevHolidays = holidaysBetween(prevStart, prevEnd);
-        Set<LocalDate> prevAbsentDates =
-                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), prevStart, prevEnd)
-                        .stream()
-                        .filter(a -> a.getStatus() == AttendanceStatus.A)
-                        .map(Attendance::getAttendanceDate)
-                        .collect(Collectors.toSet());
-
-        QuarterLeaveCalculation prevCalc =
-                policy.compute(prevStart, prevEnd, joiningDate, prevAbsentDates, prevHolidays, maxLeaves);
-        return prevCalc.lapsedLeaveDays();
     }
 
     private boolean isWeekend(LocalDate date) {
@@ -550,11 +495,43 @@ public class AttendanceQueryService {
 
         int relaxationDaysApplied =
                 relaxationDaysAppliedToMonth(resource, projectId, monthStart, attendance.absentDays());
-        int effectivePresentDays =
-                Math.min(attendance.workingDays(), attendance.presentDays() + relaxationDaysApplied);
-        double cost = (monthlyRate != null && attendance.workingDays() > 0)
-                ? round2(monthlyRate * effectivePresentDays / attendance.workingDays())
+
+        // How many of this month's absent days are covered by the leave policy's monthly allowance
+        // (leavesPerFrequencyCount when leavesFrequency=MONTHLY). These count as paid days so the
+        // resource is not deducted for leave within their entitlement.
+        int monthlyLeaveAllowance = 0;
+        if (projectId != null) {
+            Optional<LeavePolicyResponse> leavePolicy = leavePolicyClient.getLeavePolicy(projectId);
+            monthlyLeaveAllowance = resolveMonthlyLeaveAllowance(projectId, leavePolicy);
+        }
+        // Half-days consume the leave allowance first (each half-day mark = 0.5 leave days).
+        // Any remaining allowance then covers fully absent days.
+        // e.g. allowance=2, halfDays=3 (1.5d), absent=2 → halfCredit=1.5, remainingAllowance=0.5, absentCredit=0.5
+        // e.g. allowance=2, halfDays=4 (2.0d), absent=2 → halfCredit=2.0, remainingAllowance=0,   absentCredit=0
+        double halfDayLeaveConsumed = Math.min(attendance.halfDays() * 0.5, monthlyLeaveAllowance);
+        double remainingAllowance   = Math.max(0, monthlyLeaveAllowance - halfDayLeaveConsumed);
+        double paidAbsentDays       = Math.min(attendance.absentDays(), remainingAllowance);
+        double paidLeaveDaysApplied = halfDayLeaveConsumed + paidAbsentDays;
+
+        // Days actually paid for: P + HD×0.5 (worked) + halfDayLeaveCredit + paidAbsents + relaxation,
+        // capped at working days.
+        double effectivePaidDays = Math.min(
+                attendance.workingDays(),
+                attendance.presentDays()
+                        + attendance.halfDays() * 0.5   // worked portion (always paid)
+                        + halfDayLeaveConsumed           // leave portion of half-days (within allowance)
+                        + paidAbsentDays                 // absent days covered by remaining allowance
+                        + relaxationDaysApplied);
+        // Per-day unit price and derived breakup amounts (0 when there's no rate / no working days).
+        double perDayRate = (monthlyRate != null && attendance.workingDays() > 0)
+                ? round2(monthlyRate / attendance.workingDays())
                 : 0d;
+        double halfDayAmount = round2(perDayRate * attendance.halfDays() * 0.5);
+        double cost = (monthlyRate != null && attendance.workingDays() > 0)
+                ? round2(monthlyRate * effectivePaidDays / attendance.workingDays())
+                : 0d;
+        // Amount lost to truly unpaid days = full month rate minus what's actually payable.
+        double deductedAmount = monthlyRate != null ? round2(rate - cost) : 0d;
 
         return new MonthlyResourceCost(
                 resource.getResId(),
@@ -564,10 +541,40 @@ public class AttendanceQueryService {
                 periodLabel,
                 attendance.workingDays(),
                 attendance.presentDays(),
+                attendance.halfDays(),
+                attendance.absentDays(),
+                paidLeaveDaysApplied,
                 relaxationDaysApplied,
+                round2(effectivePaidDays),
                 attendance.attendancePercentage(),
                 rate,
+                perDayRate,
+                halfDayAmount,
+                deductedAmount,
                 cost);
+    }
+
+    /**
+     * Monthly paid-leave allowance per resource: uses {@code leavesPerFrequencyCount} directly
+     * when {@code leavesFrequency=MONTHLY}; divides quarterly/yearly counts proportionally.
+     * Falls back to {@link ProjectConfig}, then to 0 (no policy = no credit).
+     */
+    private int resolveMonthlyLeaveAllowance(String projectId, Optional<LeavePolicyResponse> leavePolicy) {
+        Integer count = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
+        if (count != null) {
+            String frequency = leavePolicy.map(LeavePolicyResponse::leavesFrequency).orElse(null);
+            if (frequency == null) return count;
+            return switch (frequency.trim().toUpperCase(Locale.ENGLISH)) {
+                case "MONTHLY" -> count;                        // e.g. 2/month → 2
+                case "QUARTERLY" -> Math.round(count / 3f);    // e.g. 6/quarter → 2/month
+                case "YEARLY", "ANNUALLY", "ANNUAL" -> Math.round(count / 12f); // e.g. 24/year → 2/month
+                default -> count;
+            };
+        }
+        return projectConfigRepository
+                .findById(projectId)
+                .map(ProjectConfig::getMaxLeavesPerPeriod)
+                .orElse(0); // no config → no leave credit in cost calculation
     }
 
     /**
@@ -649,8 +656,6 @@ public class AttendanceQueryService {
         LocalDate quarterEnd = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
 
-        Set<LocalDate> holidays = holidaysBetween(quarterStart, quarterEnd);
-
         List<Attendance> rows = (projectId == null || projectId.isBlank())
                 ? attendanceRepository.findByAttendanceDateBetween(quarterStart, quarterEnd)
                 : attendanceRepository.findByProjectIdAndAttendanceDateBetween(projectId, quarterStart, quarterEnd);
@@ -676,15 +681,8 @@ public class AttendanceQueryService {
                     .map(ProjectResource::getAssignmentStartDate)
                     .orElse(resource.getDateOfJoining());
 
-            Optional<LeavePolicyResponse> leavePolicy = leavePolicyClient.getLeavePolicy(resourceProjectId);
-            int maxLeaves = resolveMaxLeaves(resourceProjectId, leavePolicy);
-            boolean carryForwardAllowed =
-                    leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
-            int carriedForwardDays = resolveCarriedForwardDays(
-                    resource, resourceProjectId, year, quarter, joiningDate, maxLeaves, carryForwardAllowed);
-
-            QuarterLeaveCalculation calculation = policy.compute(
-                    quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeaves, carriedForwardDays);
+            QuarterLeaveCalculation calculation = quarterLeaveResolver.calculate(
+                    resource.getId(), resourceProjectId, joiningDate, year, quarter, absentDates);
 
             settlements.add(
                     new ResourceQuarterSettlement(resource.getResId(), resource.getName(), joiningDate, calculation));

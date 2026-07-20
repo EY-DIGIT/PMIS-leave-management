@@ -330,7 +330,7 @@ class MasterResourceServiceTest {
         when(repository.findByResId("1")).thenReturn(Optional.empty());
         ResourceUpdateRequest request = new ResourceUpdateRequest(
                 "Sanju", null, "Security Crypto Lead", "Bengaluru", Map.of(), "RFP", "NA",
-                LocalDate.of(2026, 1, 1), null);
+                LocalDate.of(2026, 1, 1), null, null);
 
         assertThatThrownBy(() -> service.updateResource("1", request)).isInstanceOf(NotFoundException.class);
     }

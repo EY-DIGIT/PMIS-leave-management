@@ -19,6 +19,9 @@ public interface ProjectResourceRepository extends JpaRepository<ProjectResource
     /** Every currently active assignment under a project — used for the per-project rate card list. */
     List<ProjectResource> findByProjectIdAndActiveTrue(String projectId);
 
+    /** Every assignment under a project, both active and inactive. */
+    List<ProjectResource> findByProjectId(String projectId);
+
     /** Every assignment for a resource, oldest first — the full project/role history. */
     List<ProjectResource> findByResourceIdOrderByAssignmentStartDateAsc(Long resourceId);
 
