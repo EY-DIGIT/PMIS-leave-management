@@ -3,6 +3,7 @@ package com.example.leavemanagement.controller;
 import com.example.leavemanagement.dto.ResourceResponse;
 import com.example.leavemanagement.dto.ResourceUpdateRequest;
 import com.example.leavemanagement.dto.ResourceUploadResult;
+import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.MasterResourceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -31,9 +32,13 @@ import org.springframework.web.multipart.MultipartFile;
 public class MasterResourceController {
 
     private final MasterResourceService masterResourceService;
+    private final FileStorageService fileStorageService;
 
-    public MasterResourceController(MasterResourceService masterResourceService) {
+    public MasterResourceController(
+            MasterResourceService masterResourceService,
+            FileStorageService fileStorageService) {
         this.masterResourceService = masterResourceService;
+        this.fileStorageService = fileStorageService;
     }
 
     /**
@@ -56,7 +61,9 @@ public class MasterResourceController {
                     @RequestParam("projectId") String projectId,
             @Parameter(description = "Resource master Excel file (.xlsx/.xls)") @RequestPart("file")
                     MultipartFile file) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(masterResourceService.upload(file, projectId));
+        ResourceUploadResult result = masterResourceService.upload(file, projectId);
+        fileStorageService.save(file, "resources/" + projectId);
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
     /**

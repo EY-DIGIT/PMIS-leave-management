@@ -33,7 +33,6 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
         this.restClient = restClientBuilder.build();
         this.baseUrl = baseUrl;
     }
-
      @Override
     public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
         try {
@@ -55,13 +54,12 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
         }
     }
 
-
-//    @Override
+//  @Override
 //public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
 //    return Optional.of(new LeavePolicyResponse(
 //            4,
 //            8,
-//            false,
+//           false,
 //            false,
 //            true,
 //            true,

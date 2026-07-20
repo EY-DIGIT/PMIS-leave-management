@@ -1,6 +1,5 @@
 package com.example.leavemanagement.dto;
 
-/*
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -13,4 +12,3 @@ public record LeaveUpdateRequest(
         @NotNull(message = "startDate is required") @JsonFormat(pattern = "yyyy-MM-dd") LocalDate startDate,
         @NotNull(message = "endDate is required") @JsonFormat(pattern = "yyyy-MM-dd") LocalDate endDate,
         String reason) {}
-*/

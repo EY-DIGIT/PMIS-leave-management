@@ -3,6 +3,7 @@ package com.example.leavemanagement.controller;
 import com.example.leavemanagement.dto.CalendarSummary;
 import com.example.leavemanagement.dto.HolidayItem;
 import com.example.leavemanagement.dto.HolidayUploadRequest;
+import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.HolidayExcelParser;
 import com.example.leavemanagement.service.HolidayService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -33,10 +34,15 @@ public class HolidayController {
 
     private final HolidayService holidayService;
     private final HolidayExcelParser excelParser;
+    private final FileStorageService fileStorageService;
 
-    public HolidayController(HolidayService holidayService, HolidayExcelParser excelParser) {
+    public HolidayController(
+            HolidayService holidayService,
+            HolidayExcelParser excelParser,
+            FileStorageService fileStorageService) {
         this.holidayService = holidayService;
         this.excelParser = excelParser;
+        this.fileStorageService = fileStorageService;
     }
 
     /**
@@ -76,6 +82,7 @@ public class HolidayController {
                     @RequestPart("file") MultipartFile file) {
         List<HolidayItem> items = excelParser.parse(file, year);
         List<HolidayItem> saved = holidayService.uploadHolidays(new HolidayUploadRequest(year, items));
+        fileStorageService.save(file, "holidays");
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 

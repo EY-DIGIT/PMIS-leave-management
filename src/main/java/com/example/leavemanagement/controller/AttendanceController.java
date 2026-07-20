@@ -6,6 +6,7 @@ import com.example.leavemanagement.dto.EmployeeLeaveDetail;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
 import com.example.leavemanagement.service.AttendanceQueryService;
+import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.LeaveReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -33,10 +34,15 @@ public class AttendanceController {
 
     private final AttendanceQueryService attendanceQueryService;
     private final LeaveReportService leaveReportService;
+    private final FileStorageService fileStorageService;
 
-    public AttendanceController(AttendanceQueryService attendanceQueryService, LeaveReportService leaveReportService) {
+    public AttendanceController(
+            AttendanceQueryService attendanceQueryService,
+            LeaveReportService leaveReportService,
+            FileStorageService fileStorageService) {
         this.attendanceQueryService = attendanceQueryService;
         this.leaveReportService = leaveReportService;
+        this.fileStorageService = fileStorageService;
     }
 
     /**
@@ -66,8 +72,10 @@ public class AttendanceController {
                             + "active assignment on this project. Optional — omit to leave rate years untouched.")
                     @RequestParam(required = false) String rateYear,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(attendanceQueryService.upload(projectId, milestoneId, startDate, endDate, rateYear, file));
+        AttendanceUploadResult result =
+                attendanceQueryService.upload(projectId, milestoneId, startDate, endDate, rateYear, file);
+        fileStorageService.saveAttendance(file, projectId, milestoneId, startDate, endDate);
+        return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
     /**
