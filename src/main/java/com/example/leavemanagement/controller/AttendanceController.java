@@ -177,13 +177,12 @@ public class AttendanceController {
      * POST /api/attendance/quarterly-relaxation
      */
     @Operation(
-            summary = "Record a quarterly leave-relaxation decision",
-            description = "The employee's relaxation request/discussion happens entirely outside the system — "
-                    + "this endpoint only records UIDAI's final decision. relaxationDays converts that many "
-                    + "days from unpaid leave into a separate 'relaxation leave' category; paid leave is never "
-                    + "changed. Must be between 0 and the quarter's unpaid leave days. Re-recording a decision "
-                    + "for the same resource/project/year/quarter overwrites the previous one. Returns the "
-                    + "recalculated quarterly settlement.")
+            summary = "Record a quarterly leave-relaxation approval",
+            description = "Each call adds relaxationDays to the running cumulative total for this "
+                    + "resource/project/quarter, moving that many days from unpaid leave into relaxation leave. "
+                    + "Paid leave is never changed. The increment is automatically clamped to the remaining "
+                    + "unpaid leave so it is impossible to approve more than exists. Returns the recalculated "
+                    + "quarterly settlement showing the updated relaxationLeave and unpaidLeave.")
     @PostMapping("/quarterly-relaxation")
     public EmployeeLeaveDetail quarterlyRelaxation(@Valid @RequestBody QuarterlyRelaxationRequest request) {
         return leaveReportService.applyQuarterlyRelaxation(request);

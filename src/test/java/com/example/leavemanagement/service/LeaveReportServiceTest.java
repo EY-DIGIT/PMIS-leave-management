@@ -3,7 +3,9 @@ package com.example.leavemanagement.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.AdditionalAnswers.returnsFirstArg;
 
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;

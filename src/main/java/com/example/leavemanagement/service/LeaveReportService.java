@@ -100,18 +100,27 @@ public class LeaveReportService {
     }
 
     /**
-     * Records UIDAI's final relaxation decision for one resource's quarter (see {@link
-     * LeaveRelaxation}) and returns the recalculated settlement. Re-recording a decision for the
-     * same quarter overwrites the previous one, rather than stacking.
+     * Incrementally adds relaxation days for one resource's quarter.
+     *
+     * <p>Each call adds {@code request.relaxationDays()} to the running cumulative total, moving
+     * that many days from unpaid leave into relaxation leave. The increment is silently clamped to
+     * the remaining unpaid leave so it is never possible to approve more relaxation than exists.
+     *
+     * <p>Formula on every call:
+     * <pre>
+     *   applied            = MIN(requested, raw.unpaidLeave - prevCumulativeRelaxation)
+     *   newRelaxationTotal = prevCumulativeRelaxation + applied
+     *   finalUnpaidLeave   = raw.unpaidLeave - newRelaxationTotal
+     * </pre>
      */
     @Transactional
     public EmployeeLeaveDetail applyQuarterlyRelaxation(QuarterlyRelaxationRequest request) {
+        if (request.relaxationDays() < 0) {
+            throw new BadRequestException("relaxationDays must be >= 0");
+        }
+
         EmployeeLeaveDetail raw =
                 rawEmployeeDetail(request.resourceId(), request.year(), request.quarter(), request.projectId());
-        if (request.relaxationDays() < 0 || request.relaxationDays() > raw.unpaidLeave()) {
-            throw new BadRequestException("relaxationDays must be between 0 and " + raw.unpaidLeave()
-                    + " (this quarter's unpaid leave days).");
-        }
 
         MasterResource resource = masterResourceRepository
                 .findByResId(request.resourceId())
@@ -120,11 +129,24 @@ public class LeaveReportService {
                 .findByResource_ResIdAndProjectIdAndYearAndQuarter(
                         request.resourceId(), request.projectId(), request.year(), request.quarter())
                 .orElseGet(() -> new LeaveRelaxation(resource, request.projectId(), request.year(), request.quarter()));
+
+        // Cumulative relaxation already approved in prior calls (0 for a brand-new record).
+        int prevRelaxationDays = relaxation.getRelaxationDays();
+
+        // Remaining unpaid leave not yet converted to relaxation.
+        int remainingUnpaid = Math.max(0, raw.unpaidLeave() - prevRelaxationDays);
+
+        // Clamp the increment — never approve more than what's still available.
+        int approved = Math.min(request.relaxationDays(), remainingUnpaid);
+
+        int newTotalRelaxation = prevRelaxationDays + approved;
+        int newFinalUnpaid     = raw.unpaidLeave() - newTotalRelaxation;
+
         relaxation.setOriginalPaidLeave(raw.paidLeave());
         relaxation.setOriginalUnpaidLeave(raw.unpaidLeave());
-        relaxation.setRelaxationDays(request.relaxationDays());
+        relaxation.setRelaxationDays(newTotalRelaxation);
         relaxation.setFinalPaidLeave(raw.paidLeave());
-        relaxation.setFinalUnpaidLeave(raw.unpaidLeave() - request.relaxationDays());
+        relaxation.setFinalUnpaidLeave(newFinalUnpaid);
         relaxation.setRemarks(request.remarks());
         relaxation.setApprovedBy(currentUserIdentifier());
         relaxation.setApprovedAt(LocalDateTime.now());
