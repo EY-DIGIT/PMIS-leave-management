@@ -10,6 +10,9 @@ package com.example.leavemanagement.dto;
  * @param projectId the project this summary is scoped to (may be null if the resource has no
  *     assignment)
  * @param period human-readable period label, e.g. "July 2026", "Q3 2026", "2026"
+ * @param paidLeaveDays absent + half-day leave consumed that falls within the period's paid-leave
+ *     entitlement: MIN(absentDays + halfDays/2, leaveLimit). Zero when no leave policy is found.
+ * @param unpaidLeaveDays leave consumed beyond the entitlement: MAX(0, totalLeave - leaveLimit).
  */
 public record AttendanceReportSummary(
         String attendanceId,
@@ -24,4 +27,6 @@ public record AttendanceReportSummary(
         int weekOffDays,
         int holidayDays,
         int wfhDays,
-        double attendancePercentage) {}
+        double attendancePercentage,
+        double paidLeaveDays,
+        double unpaidLeaveDays) {}

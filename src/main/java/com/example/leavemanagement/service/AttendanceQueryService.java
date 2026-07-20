@@ -37,6 +37,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -53,6 +55,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class AttendanceQueryService {
 
+    private static final Logger log = LoggerFactory.getLogger(AttendanceQueryService.class);
     private static final DateTimeFormatter MONTH_YEAR = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
     private static final int DEFAULT_FULL_DAY_MINUTES = 8 * 60;
     private static final int DEFAULT_HALF_DAY_MINUTES = 4 * 60;
@@ -204,18 +207,16 @@ public class AttendanceQueryService {
             }
         }
 
-        Map<String, LeavePolicyResponse> leavePoliciesByProject = new LinkedHashMap<>();
-        if (errors.isEmpty()) {
-            leavePolicyClient
-                    .getLeavePolicy(projectId)
-                    .ifPresentOrElse(
-                            policy -> leavePoliciesByProject.put(projectId, policy),
-                            () -> errors.add("Could not fetch leave policy for project " + projectId + "."));
-        }
-
         if (!errors.isEmpty()) {
             throw new AttendanceValidationException(errors);
         }
+
+        Map<String, LeavePolicyResponse> leavePoliciesByProject = new LinkedHashMap<>();
+        leavePolicyClient
+                .getLeavePolicy(projectId)
+                .ifPresentOrElse(
+                        policy -> leavePoliciesByProject.put(projectId, policy),
+                        () -> log.warn("Leave policy unavailable for project '{}', upload proceeds with default thresholds", projectId));
         return leavePoliciesByProject;
     }
 
@@ -248,7 +249,7 @@ public class AttendanceQueryService {
         validateMonthAndYear(year, month);
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
-        return projectDashboard(projectId, start, end, start.format(MONTH_YEAR));
+        return projectDashboard(projectId, start, end, start.format(MONTH_YEAR), 1);
     }
 
     /** One resource's summary for one month. */
@@ -257,7 +258,7 @@ public class AttendanceQueryService {
         validateMonthAndYear(year, month);
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
-        return employeeSummary(resourceId, start, end, start.format(MONTH_YEAR));
+        return employeeSummary(resourceId, start, end, start.format(MONTH_YEAR), 1);
     }
 
     /**
@@ -273,7 +274,7 @@ public class AttendanceQueryService {
         LocalDate start = LocalDate.of(year, months.get(0), 1);
         LocalDate end = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
-        return scopedReport(projectId, resourceId, start, end, "Q" + quarter + " " + year);
+        return scopedReport(projectId, resourceId, start, end, "Q" + quarter + " " + year, 3);
     }
 
     /**
@@ -287,30 +288,32 @@ public class AttendanceQueryService {
         }
         LocalDate start = LocalDate.of(year, 1, 1);
         LocalDate end = LocalDate.of(year, 12, 31);
-        return scopedReport(projectId, resourceId, start, end, String.valueOf(year));
+        return scopedReport(projectId, resourceId, start, end, String.valueOf(year), 12);
     }
 
     private List<AttendanceReportSummary> scopedReport(
-            String projectId, String resourceId, LocalDate start, LocalDate end, String periodLabel) {
+            String projectId, String resourceId, LocalDate start, LocalDate end,
+            String periodLabel, int numberOfMonths) {
         if (resourceId != null && !resourceId.isBlank()) {
-            return List.of(employeeSummary(resourceId, start, end, periodLabel));
+            return List.of(employeeSummary(resourceId, start, end, periodLabel, numberOfMonths));
         }
         if (projectId == null || projectId.isBlank()) {
             throw new BadRequestException("projectId or resourceId is required");
         }
-        return projectDashboard(projectId, start, end, periodLabel);
+        return projectDashboard(projectId, start, end, periodLabel, numberOfMonths);
     }
 
     private List<AttendanceReportSummary> projectDashboard(
-            String projectId, LocalDate start, LocalDate end, String periodLabel) {
+            String projectId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
+        int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
         return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
                 .map(ProjectResource::getResource)
-                .map(resource -> buildSummary(resource, projectId, start, end, periodLabel))
+                .map(resource -> buildSummary(resource, projectId, start, end, periodLabel, leaveLimit))
                 .toList();
     }
 
     private AttendanceReportSummary employeeSummary(
-            String resourceId, LocalDate start, LocalDate end, String periodLabel) {
+            String resourceId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
         MasterResource resource = masterResourceRepository
                 .findByResId(resourceId)
                 .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
@@ -318,11 +321,23 @@ public class AttendanceQueryService {
                 .findByResourceIdAndActiveTrue(resource.getId())
                 .map(ProjectResource::getProjectId)
                 .orElse(null);
-        return buildSummary(resource, projectId, start, end, periodLabel);
+        int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
+        return buildSummary(resource, projectId, start, end, periodLabel, leaveLimit);
+    }
+
+    /**
+     * Converts the leave policy to a limit for the given number of months.
+     * Monthly policy × numberOfMonths: e.g. 2/month × 3 = 6 for a quarter.
+     */
+    private int resolveLeaveLimit(String projectId, int numberOfMonths) {
+        if (projectId == null || projectId.isBlank()) return 0;
+        Optional<LeavePolicyResponse> policy = leavePolicyClient.getLeavePolicy(projectId);
+        return resolveMonthlyLeaveAllowance(projectId, policy) * numberOfMonths;
     }
 
     private AttendanceReportSummary buildSummary(
-            MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel) {
+            MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel,
+            int leaveLimit) {
         int totalDays = (int) (end.toEpochDay() - start.toEpochDay()) + 1;
         Set<LocalDate> holidays = holidaysBetween(start, end);
         int weekOffDays = 0;
@@ -348,6 +363,12 @@ public class AttendanceQueryService {
         double attendancePercentage =
                 workingDays > 0 ? Math.round(presentDays * 10000.0 / workingDays) / 100.0 : 0d;
 
+        // Leave breakdown — formula applies uniformly across monthly / quarterly / yearly periods.
+        // leaveLimit is pre-scaled to the period (e.g. 2 for monthly, 6 for quarterly, 24 for yearly).
+        double totalLeaveConsumed = absentDays + halfDays / 2.0;
+        double paidLeaveDays  = Math.min(totalLeaveConsumed, leaveLimit);
+        double unpaidLeaveDays = Math.max(0.0, totalLeaveConsumed - leaveLimit);
+
         return new AttendanceReportSummary(
                 resource.getResId(),
                 resource.getName(),
@@ -361,7 +382,9 @@ public class AttendanceQueryService {
                 weekOffDays,
                 holidayDays,
                 wfhDays,
-                attendancePercentage);
+                attendancePercentage,
+                paidLeaveDays,
+                unpaidLeaveDays);
     }
 
     private void validateMonthAndYear(int year, int month) {
@@ -472,7 +495,16 @@ public class AttendanceQueryService {
     private MonthlyResourceCost buildMonthlyCost(
             MasterResource resource, String projectId, LocalDate monthStart, String periodLabel) {
         LocalDate monthEnd = monthStart.withDayOfMonth(monthStart.lengthOfMonth());
-        AttendanceReportSummary attendance = buildSummary(resource, projectId, monthStart, monthEnd, periodLabel);
+
+        // Resolve monthly leave allowance BEFORE building the summary so the summary's
+        // paidLeaveDays / unpaidLeaveDays fields reflect the correct monthly limit.
+        int monthlyLeaveAllowance = 0;
+        if (projectId != null) {
+            Optional<LeavePolicyResponse> leavePolicy = leavePolicyClient.getLeavePolicy(projectId);
+            monthlyLeaveAllowance = resolveMonthlyLeaveAllowance(projectId, leavePolicy);
+        }
+        AttendanceReportSummary attendance =
+                buildSummary(resource, projectId, monthStart, monthEnd, periodLabel, monthlyLeaveAllowance);
 
         ProjectResource assignment = projectId == null
                 ? null
@@ -488,31 +520,14 @@ public class AttendanceQueryService {
         int relaxationDaysApplied =
                 relaxationDaysAppliedToMonth(resource, projectId, monthStart, attendance.absentDays());
 
-        // How many of this month's absent days are covered by the leave policy's monthly allowance
-        // (leavesPerFrequencyCount when leavesFrequency=MONTHLY). These count as paid days so the
-        // resource is not deducted for leave within their entitlement.
-        int monthlyLeaveAllowance = 0;
-        if (projectId != null) {
-            Optional<LeavePolicyResponse> leavePolicy = leavePolicyClient.getLeavePolicy(projectId);
-            monthlyLeaveAllowance = resolveMonthlyLeaveAllowance(projectId, leavePolicy);
-        }
-        // Half-days consume the leave allowance first (each half-day mark = 0.5 leave days).
-        // Any remaining allowance then covers fully absent days.
-        // e.g. allowance=2, halfDays=3 (1.5d), absent=2 → halfCredit=1.5, remainingAllowance=0.5, absentCredit=0.5
-        // e.g. allowance=2, halfDays=4 (2.0d), absent=2 → halfCredit=2.0, remainingAllowance=0,   absentCredit=0
-        double halfDayLeaveConsumed = Math.min(attendance.halfDays() * 0.5, monthlyLeaveAllowance);
-        double remainingAllowance   = Math.max(0, monthlyLeaveAllowance - halfDayLeaveConsumed);
-        double paidAbsentDays       = Math.min(attendance.absentDays(), remainingAllowance);
-        double paidLeaveDaysApplied = halfDayLeaveConsumed + paidAbsentDays;
-
-        // Days actually paid for: P + HD×0.5 (worked) + halfDayLeaveCredit + paidAbsents + relaxation,
-        // capped at working days.
+        // paidLeaveDays = MIN(absentDays + halfDays/2, monthlyLeaveAllowance) — computed in buildSummary.
+        // effectivePaidDays: P days + half-day worked portion (0.5 each) + leave-covered leave + relaxation.
+        double paidLeaveDaysApplied = attendance.paidLeaveDays();
         double effectivePaidDays = Math.min(
                 attendance.workingDays(),
                 attendance.presentDays()
-                        + attendance.halfDays() * 0.5   // worked portion (always paid)
-                        + halfDayLeaveConsumed           // leave portion of half-days (within allowance)
-                        + paidAbsentDays                 // absent days covered by remaining allowance
+                        + attendance.halfDays() * 0.5   // worked portion of HD days (always paid)
+                        + paidLeaveDaysApplied          // leave-covered absent + half-day leave portion
                         + relaxationDaysApplied);
         // Per-day unit price and derived breakup amounts (0 when there's no rate / no working days).
         double perDayRate = (monthlyRate != null && attendance.workingDays() > 0)

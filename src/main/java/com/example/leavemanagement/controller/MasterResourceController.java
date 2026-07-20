@@ -5,6 +5,8 @@ import com.example.leavemanagement.dto.ResourceUpdateRequest;
 import com.example.leavemanagement.dto.ResourceUploadResult;
 import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.MasterResourceService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,6 +32,8 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/resources")
 @Tag(name = "Resources", description = "Master resource (workforce) table: upload, search, get and update")
 public class MasterResourceController {
+
+    private static final Logger log = LoggerFactory.getLogger(MasterResourceController.class);
 
     private final MasterResourceService masterResourceService;
     private final FileStorageService fileStorageService;
@@ -62,7 +66,11 @@ public class MasterResourceController {
             @Parameter(description = "Resource master Excel file (.xlsx/.xls)") @RequestPart("file")
                     MultipartFile file) {
         ResourceUploadResult result = masterResourceService.upload(file, projectId);
-        fileStorageService.save(file, "resources/" + projectId);
+        try {
+            fileStorageService.save(file, "resources/" + projectId);
+        } catch (Exception e) {
+            log.warn("Resource file could not be saved to storage (NFS may be unavailable): {}", e.getMessage());
+        }
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 

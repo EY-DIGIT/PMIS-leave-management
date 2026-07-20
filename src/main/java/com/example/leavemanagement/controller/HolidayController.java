@@ -6,6 +6,8 @@ import com.example.leavemanagement.dto.HolidayUploadRequest;
 import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.HolidayExcelParser;
 import com.example.leavemanagement.service.HolidayService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -31,6 +33,8 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api")
 @Tag(name = "Holidays & Calendar", description = "Upload public holidays and read per-year calendar data")
 public class HolidayController {
+
+    private static final Logger log = LoggerFactory.getLogger(HolidayController.class);
 
     private final HolidayService holidayService;
     private final HolidayExcelParser excelParser;
@@ -82,7 +86,11 @@ public class HolidayController {
                     @RequestPart("file") MultipartFile file) {
         List<HolidayItem> items = excelParser.parse(file, year);
         List<HolidayItem> saved = holidayService.uploadHolidays(new HolidayUploadRequest(year, items));
-        fileStorageService.save(file, "holidays");
+        try {
+            fileStorageService.save(file, "holidays");
+        } catch (Exception e) {
+            log.warn("Holiday file could not be saved to storage (NFS may be unavailable): {}", e.getMessage());
+        }
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 

@@ -8,6 +8,8 @@ import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
 import com.example.leavemanagement.service.AttendanceQueryService;
 import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.LeaveReportService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -31,6 +33,8 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/attendance")
 @Tag(name = "Attendance", description = "Daily attendance upload, reports, and quarterly leave-policy settlement")
 public class AttendanceController {
+
+    private static final Logger log = LoggerFactory.getLogger(AttendanceController.class);
 
     private final AttendanceQueryService attendanceQueryService;
     private final LeaveReportService leaveReportService;
@@ -74,7 +78,11 @@ public class AttendanceController {
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
         AttendanceUploadResult result =
                 attendanceQueryService.upload(projectId, milestoneId, startDate, endDate, rateYear, file);
-        fileStorageService.saveAttendance(file, projectId, milestoneId, startDate, endDate);
+        try {
+            fileStorageService.saveAttendance(file, projectId, milestoneId, startDate, endDate);
+        } catch (Exception e) {
+            log.warn("Attendance file could not be saved to storage (NFS may be unavailable): {}", e.getMessage());
+        }
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
