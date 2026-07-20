@@ -28,7 +28,6 @@ import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
-import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.LocalDate;
@@ -64,9 +63,6 @@ class AttendanceQueryServiceTest {
     private ProjectResourceRepository projectResourceRepository;
 
     @Mock
-    private ProjectConfigRepository projectConfigRepository;
-
-    @Mock
     private LeavePolicyClient leavePolicyClient;
 
     @Mock
@@ -80,10 +76,10 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, holidayRepository, projectConfigRepository, leavePolicyClient, policy);
+                attendanceRepository, holidayRepository, leavePolicyClient, policy);
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
-                projectResourceRepository, projectConfigRepository, leavePolicyClient, leaveRelaxationRepository,
+                projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
                 quarterLeaveResolver);
     }
 
@@ -562,7 +558,6 @@ class AttendanceQueryServiceTest {
                 .thenReturn(rows);
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.empty());
-        when(projectConfigRepository.findById("P1")).thenReturn(Optional.empty());
 
         QuarterLeaveReport report = service.quarterlySettlement(2024, 2);
 

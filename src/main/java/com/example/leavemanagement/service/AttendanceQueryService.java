@@ -14,7 +14,6 @@ import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
-import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.AttendanceValidationException;
@@ -23,7 +22,6 @@ import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
-import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.DayOfWeek;
@@ -64,7 +62,6 @@ public class AttendanceQueryService {
     private final PublicHolidayRepository holidayRepository;
     private final MasterResourceRepository masterResourceRepository;
     private final ProjectResourceRepository projectResourceRepository;
-    private final ProjectConfigRepository projectConfigRepository;
     private final LeavePolicyClient leavePolicyClient;
     private final LeaveRelaxationRepository leaveRelaxationRepository;
     private final QuarterLeaveResolver quarterLeaveResolver;
@@ -75,7 +72,6 @@ public class AttendanceQueryService {
             PublicHolidayRepository holidayRepository,
             MasterResourceRepository masterResourceRepository,
             ProjectResourceRepository projectResourceRepository,
-            ProjectConfigRepository projectConfigRepository,
             LeavePolicyClient leavePolicyClient,
             LeaveRelaxationRepository leaveRelaxationRepository,
             QuarterLeaveResolver quarterLeaveResolver) {
@@ -84,7 +80,6 @@ public class AttendanceQueryService {
         this.holidayRepository = holidayRepository;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
-        this.projectConfigRepository = projectConfigRepository;
         this.leavePolicyClient = leavePolicyClient;
         this.leaveRelaxationRepository = leaveRelaxationRepository;
         this.quarterLeaveResolver = quarterLeaveResolver;
@@ -165,10 +160,7 @@ public class AttendanceQueryService {
         if (leavePolicy != null && leavePolicy.fullDay() != null && leavePolicy.halfDay() != null) {
             return new int[] {leavePolicy.fullDay() * 60, leavePolicy.halfDay() * 60};
         }
-        return projectConfigRepository
-                .findById(projectId)
-                .map(c -> new int[] {c.getFullDayMinutes(), c.getHalfDayMinutes()})
-                .orElse(new int[] {DEFAULT_FULL_DAY_MINUTES, DEFAULT_HALF_DAY_MINUTES});
+        return new int[] {DEFAULT_FULL_DAY_MINUTES, DEFAULT_HALF_DAY_MINUTES};
     }
 
     private boolean isWeekend(LocalDate date) {
@@ -571,10 +563,7 @@ public class AttendanceQueryService {
                 default -> count;
             };
         }
-        return projectConfigRepository
-                .findById(projectId)
-                .map(ProjectConfig::getMaxLeavesPerPeriod)
-                .orElse(0); // no config → no leave credit in cost calculation
+        return 0;
     }
 
     /**

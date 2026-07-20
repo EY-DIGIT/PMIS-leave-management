@@ -17,7 +17,6 @@ import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
-import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.DayOfWeek;
@@ -45,9 +44,6 @@ class LeaveReportServiceTest {
     private ProjectResourceRepository projectResourceRepository;
 
     @Mock
-    private ProjectConfigRepository projectConfigRepository;
-
-    @Mock
     private AttendanceRepository attendanceRepository;
 
     @Mock
@@ -67,10 +63,10 @@ class LeaveReportServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, publicHolidayRepository, projectConfigRepository, leavePolicyClient, policy);
+                attendanceRepository, publicHolidayRepository, leavePolicyClient, policy);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
-                projectConfigRepository, attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver);
+                attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver);
     }
 
     private void setId(MasterResource resource, long id) {

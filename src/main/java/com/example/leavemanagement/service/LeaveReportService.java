@@ -10,14 +10,12 @@ import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
-import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
-import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.security.CurrentUser;
 import com.example.leavemanagement.security.CurrentUserContext;
@@ -36,7 +34,6 @@ public class LeaveReportService {
     private final AttendanceQueryService attendanceQueryService;
     private final MasterResourceRepository masterResourceRepository;
     private final ProjectResourceRepository projectResourceRepository;
-    private final ProjectConfigRepository projectConfigRepository;
     private final AttendanceRepository attendanceRepository;
     private final LeaveRelaxationRepository leaveRelaxationRepository;
     private final QuarterLeaveResolver quarterLeaveResolver;
@@ -45,14 +42,12 @@ public class LeaveReportService {
             AttendanceQueryService attendanceQueryService,
             MasterResourceRepository masterResourceRepository,
             ProjectResourceRepository projectResourceRepository,
-            ProjectConfigRepository projectConfigRepository,
             AttendanceRepository attendanceRepository,
             LeaveRelaxationRepository leaveRelaxationRepository,
             QuarterLeaveResolver quarterLeaveResolver) {
         this.attendanceQueryService = attendanceQueryService;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
-        this.projectConfigRepository = projectConfigRepository;
         this.attendanceRepository = attendanceRepository;
         this.leaveRelaxationRepository = leaveRelaxationRepository;
         this.quarterLeaveResolver = quarterLeaveResolver;
@@ -218,10 +213,7 @@ public class LeaveReportService {
             throw new NotFoundException(
                     "No leave record for attendanceId " + attendanceId + " under project " + filterProjectId);
         }
-        ProjectConfig config = Optional.ofNullable(projectId)
-                .flatMap(projectConfigRepository::findById)
-                .orElse(null);
-        String projectName = config != null ? config.getProjectName() : null;
+        String projectName = null;
 
         LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
         String employeeName = resource.map(MasterResource::getName)

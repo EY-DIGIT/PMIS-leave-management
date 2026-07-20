@@ -5,13 +5,10 @@ import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
-import com.example.leavemanagement.entity.ProjectConfig;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.repository.AttendanceRepository;
-import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -30,19 +27,16 @@ public class QuarterLeaveResolver {
 
     private final AttendanceRepository attendanceRepository;
     private final PublicHolidayRepository holidayRepository;
-    private final ProjectConfigRepository projectConfigRepository;
     private final LeavePolicyClient leavePolicyClient;
     private final QuarterLeavePolicy policy;
 
     public QuarterLeaveResolver(
             AttendanceRepository attendanceRepository,
             PublicHolidayRepository holidayRepository,
-            ProjectConfigRepository projectConfigRepository,
             LeavePolicyClient leavePolicyClient,
             QuarterLeavePolicy policy) {
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
-        this.projectConfigRepository = projectConfigRepository;
         this.leavePolicyClient = leavePolicyClient;
         this.policy = policy;
     }
@@ -91,10 +85,7 @@ public class QuarterLeaveResolver {
         if (count != null) {
             return leavesForQuarter(count, leavePolicy.map(LeavePolicyResponse::leavesFrequency).orElse(null));
         }
-        return Optional.ofNullable(projectId)
-                .flatMap(projectConfigRepository::findById)
-                .map(ProjectConfig::getMaxLeavesPerPeriod)
-                .orElse(QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE);
+        return QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE;
     }
 
     /** Scales a leave allowance expressed at {@code frequency} to a single quarter (3 months). */
