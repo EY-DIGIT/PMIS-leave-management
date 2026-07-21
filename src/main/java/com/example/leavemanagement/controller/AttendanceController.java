@@ -68,6 +68,8 @@ public class AttendanceController {
                     @RequestParam("projectId") String projectId,
             @Parameter(description = "Milestone id this attendance upload belongs to") @RequestParam("milestoneId")
                     String milestoneId,
+            @Parameter(description = "Activity id this attendance upload belongs to") @RequestParam(value = "activityId", required = false)
+                    String activityId,
             @Parameter(description = "Attendance Start Date", example = "2026-07-01")
                     @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @Parameter(description = "Attendance End Date", example = "2026-07-31")
@@ -84,7 +86,7 @@ public class AttendanceController {
             log.warn("Attendance file could not be saved to storage (NFS may be unavailable): {}", e.getMessage());
         }
         AttendanceUploadResult result =
-                attendanceQueryService.upload(projectId, milestoneId, startDate, endDate, rateYear, file);
+                attendanceQueryService.upload(projectId, milestoneId, activityId, startDate, endDate, rateYear, file);
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 

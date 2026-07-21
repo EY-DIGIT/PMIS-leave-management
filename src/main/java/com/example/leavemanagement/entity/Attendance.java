@@ -56,6 +56,9 @@ public class Attendance {
     @Column(name = "milestone_id", nullable = false, length = 50)
     private String milestoneId;
 
+    @Column(name = "activity_id", length = 100)
+    private String activityId;
+
     @Column(name = "attendance_date", nullable = false)
     @Setter(AccessLevel.NONE)
     private LocalDate attendanceDate;
@@ -85,11 +88,13 @@ public class Attendance {
             MasterResource resource,
             String projectId,
             String milestoneId,
+            String activityId,
             LocalDate attendanceDate,
             AttendanceStatus status) {
         this.resource = resource;
         this.projectId = projectId;
         this.milestoneId = milestoneId;
+        this.activityId = activityId;
         this.attendanceDate = attendanceDate;
         this.status = status;
     }

@@ -103,6 +103,7 @@ public class AttendanceQueryService {
     public AttendanceUploadResult upload(
             String projectId,
             String milestoneId,
+            String activityId,
             LocalDate startDate,
             LocalDate endDate,
             String rateYear,
@@ -127,10 +128,10 @@ public class AttendanceQueryService {
                 Attendance row;
                 if (workedMinutes != null && workedMinutes > 0) {
                     AttendanceStatus status = workedMinutes >= thresholds[0] ? AttendanceStatus.P : AttendanceStatus.HD;
-                    row = new Attendance(resource, projectId, milestoneId, date, status);
+                    row = new Attendance(resource, projectId, milestoneId, activityId, date, status);
                     row.setWorkingHours(Math.round(workedMinutes / 60.0 * 100) / 100.0);
                 } else {
-                    row = new Attendance(resource, projectId, milestoneId, date, AttendanceStatus.A);
+                    row = new Attendance(resource, projectId, milestoneId, activityId, date, AttendanceStatus.A);
                 }
                 attendanceRepository.save(row);
             }

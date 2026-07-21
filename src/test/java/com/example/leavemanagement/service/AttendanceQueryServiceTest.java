@@ -128,7 +128,7 @@ class AttendanceQueryServiceTest {
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         AttendanceUploadResult result = service.upload(
-                "P1", "M1", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile());
+                "P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile());
 
         assertThat(result.resourcesStored()).isEqualTo(1);
         assertThat(result.leavePoliciesByProject()).containsKey("P1");
@@ -155,7 +155,7 @@ class AttendanceQueryServiceTest {
                 .thenReturn(List.of(new com.example.leavemanagement.entity.PublicHoliday(
                         LocalDate.of(2026, 7, 6), "Test Holiday")));
 
-        service.upload("P1", "M1", LocalDate.of(2026, 7, 3), LocalDate.of(2026, 7, 6), null, anyFile());
+        service.upload("P1", "M1", null, LocalDate.of(2026, 7, 3), LocalDate.of(2026, 7, 6), null, anyFile());
 
         // Only Friday (the one working, non-holiday day) gets a row.
         verify(attendanceRepository, times(1)).save(any());
@@ -168,7 +168,7 @@ class AttendanceQueryServiceTest {
         when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.upload(
-                        "P1", "M1", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
+                        "P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 does not exist."));
@@ -185,7 +185,7 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.upload(
-                        "P1", "M1", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
+                        "P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 is inactive."));
@@ -199,7 +199,7 @@ class AttendanceQueryServiceTest {
         stubActiveResource("E1", "P1", 1L);
 
         assertThatThrownBy(() -> service.upload(
-                        "P2", "M1", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
+                        "P2", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 belongs to project P1, not P2."));
@@ -209,7 +209,7 @@ class AttendanceQueryServiceTest {
     @Test
     void uploadRejectsStartDateAfterEndDate() {
         assertThatThrownBy(() -> service.upload(
-                        "P1", "M1", LocalDate.of(2026, 7, 20), LocalDate.of(2026, 7, 4), null, anyFile()))
+                        "P1", "M1", null, LocalDate.of(2026, 7, 20), LocalDate.of(2026, 7, 4), null, anyFile()))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessage("Attendance Start Date cannot be greater than Attendance End Date.");
         verify(attendanceRepository, never()).save(any());
@@ -231,7 +231,7 @@ class AttendanceQueryServiceTest {
                 .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, "HALF_DAY", "FULL_DAY", true, true, 2, "MONTHLY", true, false, true, true)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
-        service.upload("P1", "M1", LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1), "Year-2", anyFile());
+        service.upload("P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1), "Year-2", anyFile());
 
         assertThat(assignment.getRateYear()).isEqualTo("Year-2");
         verify(projectResourceRepository).save(assignment);
