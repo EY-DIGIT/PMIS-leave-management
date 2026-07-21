@@ -8,6 +8,7 @@ import com.example.leavemanagement.service.HolidayExcelExporter;
 import com.example.leavemanagement.service.HolidayService;
 import com.example.leavemanagement.service.MasterResourceService;
 import com.example.leavemanagement.service.ResourceExcelExporter;
+import com.example.leavemanagement.service.TemplateService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -18,6 +19,7 @@ import java.time.LocalDate;
 import java.util.List;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -41,18 +43,21 @@ public class ExportController {
     private final HolidayExcelExporter holidayExcelExporter;
     private final MasterResourceService masterResourceService;
     private final ResourceExcelExporter resourceExcelExporter;
+    private final TemplateService templateService;
 
     public ExportController(
             FileStorageService fileStorageService,
             HolidayService holidayService,
             HolidayExcelExporter holidayExcelExporter,
             MasterResourceService masterResourceService,
-            ResourceExcelExporter resourceExcelExporter) {
+            ResourceExcelExporter resourceExcelExporter,
+            TemplateService templateService) {
         this.fileStorageService = fileStorageService;
         this.holidayService = holidayService;
         this.holidayExcelExporter = holidayExcelExporter;
         this.masterResourceService = masterResourceService;
         this.resourceExcelExporter = resourceExcelExporter;
+        this.templateService = templateService;
     }
 
     // ------------------------------------------------------------------
@@ -149,6 +154,67 @@ public class ExportController {
                 ? "resources_" + projectId + "_" + LocalDate.now() + ".xlsx"
                 : "resources_" + LocalDate.now() + ".xlsx";
         return xlsxResponse(bytes, filename);
+    }
+
+    // ------------------------------------------------------------------
+    // Blank upload templates
+    // ------------------------------------------------------------------
+
+    @Operation(
+            summary = "Download blank attendance upload template",
+            description = "Returns an empty .xlsx whose column layout exactly matches the attendance upload parser. "
+                    + "Col A=Attendance ID, B=Employee Name, C=Designation, D=Type (In-Time/Out-Time/Total-Time), "
+                    + "cols E onwards = day 1..N of the period. "
+                    + "Pass the same startDate/endDate you will use when uploading — the template contains "
+                    + "exactly that many day columns so the upload parser will accept it without error.")
+    @GetMapping("/template/attendance")
+    public ResponseEntity<ByteArrayResource> attendanceTemplate(
+            @Parameter(description = "Period start date (yyyy-MM-dd)", example = "2026-07-01")
+                    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Period end date (yyyy-MM-dd)", example = "2026-07-31")
+                    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+        byte[] bytes = templateService.attendanceTemplate(startDate, endDate);
+        String filename = "attendance_template_" + startDate + "_" + endDate + ".xlsx";
+        return xlsxResponse(bytes, filename);
+    }
+
+    @Operation(
+            summary = "Download blank resource master upload template",
+            description = "Returns an empty .xlsx whose column layout exactly matches the resource master upload "
+                    + "parser: Attendance ID | Employee Name | Role as per Contract | Location | "
+                    + "Date of Joining | Last Day of Working | Year-1..Year-7 (monthly rates) | "
+                    + "Category (RFP/CCN/ASG) | CCN/ASG Details. "
+                    + "Row 1 is a group-heading row (auto-skipped by the parser); data starts from row 3.")
+    @GetMapping("/template/resources")
+    public ResponseEntity<ByteArrayResource> resourceTemplate() {
+        byte[] bytes = templateService.resourceTemplate();
+        return xlsxResponse(bytes, "resource_master_template.xlsx");
+    }
+
+    @Operation(
+            summary = "Download blank designation rate card upload template",
+            description = "Returns an empty .xlsx whose column layout exactly matches the designation rate card "
+                    + "upload parser: Role as per Contract | Year-1 Rate | … | Year-7 Rate. "
+                    + "Fill in the role names and monthly rates, then POST to "
+                    + "/api/designation-rates/upload before uploading the resource master.")
+    @GetMapping("/template/designation-rates")
+    public ResponseEntity<ByteArrayResource> designationRateTemplate() {
+        byte[] bytes = templateService.designationRateTemplate();
+        return xlsxResponse(bytes, "designation_rate_template.xlsx");
+    }
+
+    @Operation(
+            summary = "Download blank holiday upload template",
+            description = "Returns an empty .xlsx whose column layout exactly matches the holiday upload parser: "
+                    + "S.No | Holiday | Date | Day. "
+                    + "The Date column accepts 'dd MMMM' text (e.g. '26 January'), a full Excel date cell, "
+                    + "or yyyy-MM-dd — all resolved against the year passed to the upload endpoint.")
+    @GetMapping("/template/holidays")
+    public ResponseEntity<ByteArrayResource> holidayTemplate(
+            @Parameter(description = "Year the template is for, e.g. 2026", example = "2026")
+                    @RequestParam(defaultValue = "2026") int year) {
+        byte[] bytes = templateService.holidayTemplate(year);
+        return xlsxResponse(bytes, "holidays_template_" + year + ".xlsx");
     }
 
     private ResponseEntity<ByteArrayResource> xlsxResponse(byte[] bytes, String filename) {

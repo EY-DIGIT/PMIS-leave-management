@@ -63,9 +63,11 @@ public class MasterResourceController {
     public ResponseEntity<ResourceUploadResult> upload(
             @Parameter(description = "Project id every resource in this upload belongs to")
                     @RequestParam("projectId") String projectId,
+            @Parameter(description = "Organisation id — used to validate roles against the designation rate master")
+                    @RequestParam("organisationId") String organisationId,
             @Parameter(description = "Resource master Excel file (.xlsx/.xls)") @RequestPart("file")
                     MultipartFile file) {
-        ResourceUploadResult result = masterResourceService.upload(file, projectId);
+        ResourceUploadResult result = masterResourceService.upload(file, projectId, organisationId);
         try {
             fileStorageService.save(file, "resources/" + projectId);
         } catch (Exception e) {

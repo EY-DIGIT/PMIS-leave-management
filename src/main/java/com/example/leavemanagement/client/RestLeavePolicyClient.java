@@ -54,23 +54,24 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
         }
     }
 
-//  @Override
-//public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
-//    return Optional.of(new LeavePolicyResponse(
-//            4,
-//            8,
-//           false,
-//            false,
-//            true,
-//            true,
-//            2,
-//            "MONTHLY",
-//            true,
-//            false,
-//            true,
-//            true
-//    ));
-//}
+//   @Override
+//   public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
+//       return Optional.of(new LeavePolicyResponse(
+//               4,           // halfDay (hours)
+//               8,           // fullDay (hours)
+//               "false",     // saturdayWorking
+//               "false",     // sundayWorking
+//               true,        // attendanceCaptured
+//               true,        // sandwichLeaveApplied
+//               2,           // leavesPerFrequencyCount
+//               "MONTHLY",   // leavesFrequency
+//               true,        // proratedLeavesApplied
+//               false,       // carryForwardAllowed
+//               true,        // leaveLapseAtQuarterEnd
+//               true         // automaticBalanceReset
+//       ));
+//   }
+
 
     /** Forwards the current request's bearer token — the projects service requires one. */
     private void propagateCallerToken(HttpHeaders headers) {

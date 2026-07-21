@@ -4,10 +4,12 @@ import com.example.leavemanagement.dto.ResourceRow;
 import com.example.leavemanagement.dto.ResourceResponse;
 import com.example.leavemanagement.dto.ResourceUpdateRequest;
 import com.example.leavemanagement.dto.ResourceUploadResult;
+import com.example.leavemanagement.entity.DesignationRateMaster;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
+import com.example.leavemanagement.repository.DesignationRateMasterRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import java.time.LocalDate;
@@ -16,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,14 +39,17 @@ public class MasterResourceService {
     private final ResourceParser parser;
     private final MasterResourceRepository repository;
     private final ProjectResourceRepository projectResourceRepository;
+    private final DesignationRateMasterRepository designationRateMasterRepository;
 
     public MasterResourceService(
             ResourceParser parser,
             MasterResourceRepository repository,
-            ProjectResourceRepository projectResourceRepository) {
+            ProjectResourceRepository projectResourceRepository,
+            DesignationRateMasterRepository designationRateMasterRepository) {
         this.parser = parser;
         this.repository = repository;
         this.projectResourceRepository = projectResourceRepository;
+        this.designationRateMasterRepository = designationRateMasterRepository;
     }
 
     /**
@@ -66,19 +72,47 @@ public class MasterResourceService {
      *       open a new one, preserving role history.
      * </ul>
      */
+    /**
+     * Parses the resource master Excel and upserts every row, assigning each resource to
+     * {@code projectId}. Before upserting, validates that every row's "Role as per Contract"
+     * exists in the designation rate master for the given project/organisation — upload the
+     * designation rate card first if any role is missing.
+     */
     @Transactional
-    public ResourceUploadResult upload(MultipartFile file, String projectId) {
+    public ResourceUploadResult upload(MultipartFile file, String projectId, String organisationId) {
         List<ResourceRow> rows = parser.parse(file);
+        validateRoles(rows, projectId, organisationId);
         int stored = 0;
         for (ResourceRow row : rows) {
             MasterResource resource = repository
                     .findByResId(row.resId())
                     .map(existing -> updateMasterFields(existing, row))
                     .orElseGet(() -> updateMasterFields(new MasterResource(row.resId()), row));
-            applyAssignment(resource, row, projectId);
+            applyAssignment(resource, row, projectId, organisationId);
             stored++;
         }
         return new ResourceUploadResult(rows.size(), stored);
+    }
+
+    private void validateRoles(List<ResourceRow> rows, String projectId, String organisationId) {
+        List<String> errors = rows.stream()
+                .filter(r -> !designationRateMasterRepository
+                        .existsByRoleAndProjectIdAndOrganisationId(r.role(), projectId, organisationId))
+                .map(r -> "Role '" + r.role() + "' (resource " + r.resId()
+                        + ") is not defined in the designation rate master for project "
+                        + projectId + " / organisation " + organisationId
+                        + ". Upload the designation rate card (POST /api/designation-rates/upload) first.")
+                .collect(Collectors.toList());
+        if (!errors.isEmpty()) {
+            throw new BadRequestException(String.join("\n", errors));
+        }
+    }
+
+    private Map<String, Double> fetchRateCard(String role, String projectId, String organisationId) {
+        return designationRateMasterRepository
+                .findByRoleAndProjectIdAndOrganisationId(role, projectId, organisationId)
+                .map(DesignationRateMaster::getRateCardByYear)
+                .orElse(Map.of());
     }
 
     private MasterResource updateMasterFields(MasterResource resource, ResourceRow row) {
@@ -92,7 +126,8 @@ public class MasterResourceService {
         return repository.save(resource);
     }
 
-    private void applyAssignment(MasterResource resource, ResourceRow row, String projectId) {
+    private void applyAssignment(
+            MasterResource resource, ResourceRow row, String projectId, String organisationId) {
         Optional<ProjectResource> active = projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId());
 
         if (active.isPresent() && !active.get().getProjectId().equals(projectId)) {
@@ -103,9 +138,9 @@ public class MasterResourceService {
         }
 
         if (active.isPresent() && Objects.equals(active.get().getRole(), row.role()) && row.active()) {
-            // Same project, same role: routine correction (rate card, etc.) — update in place.
+            // Same project, same role: refresh the rate card from the designation master in place.
             ProjectResource assignment = active.get();
-            assignment.setRateCardByYear(row.rateCardByYear());
+            assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
             projectResourceRepository.save(assignment);
             return;
         }
@@ -130,7 +165,7 @@ public class MasterResourceService {
         if (row.active()) {
             // Brand-new assignment: first-time upload, rejoin, or role change on the same project.
             ProjectResource assignment = new ProjectResource(resource, projectId, row.role(), row.dateOfJoining());
-            assignment.setRateCardByYear(row.rateCardByYear());
+            assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
             projectResourceRepository.save(assignment);
         }
     }

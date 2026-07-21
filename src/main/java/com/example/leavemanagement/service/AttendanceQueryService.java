@@ -363,12 +363,12 @@ public class AttendanceQueryService {
         double attendancePercentage =
                 workingDays > 0 ? Math.round(presentDays * 10000.0 / workingDays) / 100.0 : 0d;
 
-        // Only full absent days (status=A) consume leave entitlement.
-        // Half days are partial work days: the worked half is already credited via halfDays*0.5
-        // in the cost formula, so counting them again as leave would double-penalise the employee.
+        // Each half day counts as 0.5 days toward the leave quota (4 half days = 2 leaves).
+        // Full absent days (status=A) count as 1.0 each.
         // leaveLimit is pre-scaled to the period (2/month → 6 for quarterly, 24 for yearly).
-        double paidLeaveDays   = Math.min((double) absentDays, leaveLimit);
-        double unpaidLeaveDays = Math.max(0.0, absentDays - leaveLimit);
+        double effectiveAbsent = absentDays + halfDays * 0.5;
+        double paidLeaveDays   = Math.min(effectiveAbsent, leaveLimit);
+        double unpaidLeaveDays = Math.max(0.0, effectiveAbsent - leaveLimit);
 
         return new AttendanceReportSummary(
                 resource.getResId(),

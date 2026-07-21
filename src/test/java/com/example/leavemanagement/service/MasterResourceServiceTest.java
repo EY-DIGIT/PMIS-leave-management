@@ -15,6 +15,8 @@ import com.example.leavemanagement.dto.ResourceUploadResult;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.exception.NotFoundException;
+import com.example.leavemanagement.entity.DesignationRateMaster;
+import com.example.leavemanagement.repository.DesignationRateMasterRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import java.time.LocalDate;
@@ -30,6 +32,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 
+import static org.mockito.ArgumentMatchers.anyString;
+
 @ExtendWith(MockitoExtension.class)
 class MasterResourceServiceTest {
 
@@ -42,11 +46,20 @@ class MasterResourceServiceTest {
     @Mock
     private ProjectResourceRepository projectResourceRepository;
 
+    @Mock
+    private DesignationRateMasterRepository designationRateMasterRepository;
+
     private MasterResourceService service;
 
     @BeforeEach
     void setUp() {
-        service = new MasterResourceService(parser, repository, projectResourceRepository);
+        service = new MasterResourceService(parser, repository, projectResourceRepository, designationRateMasterRepository);
+    }
+
+    /** Stubs role validation to pass for any role/project/org combination. */
+    private void stubAllRolesValid() {
+        when(designationRateMasterRepository.existsByRoleAndProjectIdAndOrganisationId(
+                anyString(), anyString(), anyString())).thenReturn(true);
     }
 
     private MultipartFile anyFile() {
@@ -74,15 +87,16 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadInsertsBrandNewResourceAndAssignment() {
+        stubAllRolesValid();
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Crypto Lead", "Bengaluru", LocalDate.of(2026, 1, 1), null,
-                Map.of("Year-1", 100874.0), "RFP", "NA", true);
+                "RFP", "NA", true);
         when(parser.parse(any())).thenReturn(List.of(row));
         when(repository.findByResId("1")).thenReturn(Optional.empty());
         stubSaveAssignsId(1L);
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.empty());
 
-        ResourceUploadResult result = service.upload(anyFile(), "P1");
+        ResourceUploadResult result = service.upload(anyFile(), "P1", "ORG1");
 
         assertThat(result.resourcesStored()).isEqualTo(1);
         ArgumentCaptor<MasterResource> masterCaptor = ArgumentCaptor.forClass(MasterResource.class);
@@ -100,6 +114,7 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadWithSameProjectAndRoleUpdatesAssignmentInPlace() {
+        stubAllRolesValid();
         MasterResource resource = new MasterResource("1");
         setId(resource, 1L);
         resource.setDateOfJoining(LocalDate.of(2026, 1, 1));
@@ -110,13 +125,18 @@ class MasterResourceServiceTest {
                 new ProjectResource(resource, "P1", "Security Crypto Lead", LocalDate.of(2026, 1, 1));
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(activeAssignment));
 
-        // Same project, same role, e.g. a rate-card correction — no history row created.
+        // Same project, same role — rate card is refreshed from the designation master.
+        DesignationRateMaster desig = new DesignationRateMaster("Security Crypto Lead", "P1", "ORG1");
+        desig.setRateCardByYear(Map.of("Year-1", 120000.0));
+        when(designationRateMasterRepository.findByRoleAndProjectIdAndOrganisationId(
+                "Security Crypto Lead", "P1", "ORG1")).thenReturn(Optional.of(desig));
+
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Crypto Lead", "Delhi", LocalDate.of(2026, 1, 1), null,
-                Map.of("Year-1", 120000.0), "RFP", "NA", true);
+                "RFP", "NA", true);
         when(parser.parse(any())).thenReturn(List.of(row));
 
-        service.upload(anyFile(), "P1");
+        service.upload(anyFile(), "P1", "ORG1");
 
         verify(projectResourceRepository, times(1)).save(activeAssignment);
         assertThat(activeAssignment.getRateCardByYear()).containsEntry("Year-1", 120000.0);
@@ -125,6 +145,7 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadWithChangedRoleClosesOldAssignmentAndOpensNew() {
+        stubAllRolesValid();
         MasterResource resource = new MasterResource("1");
         setId(resource, 1L);
         resource.setDateOfJoining(LocalDate.of(2026, 1, 1));
@@ -138,10 +159,10 @@ class MasterResourceServiceTest {
         // Role changes to Principal Architect effective 15-Jul-2026, same project.
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Principal Architect", "Bengaluru", LocalDate.of(2026, 7, 15), null,
-                Map.of("Year-1", 150000.0), "RFP", "NA", true);
+                "RFP", "NA", true);
         when(parser.parse(any())).thenReturn(List.of(row));
 
-        service.upload(anyFile(), "P1");
+        service.upload(anyFile(), "P1", "ORG1");
 
         assertThat(activeAssignment.isActive()).isFalse();
         assertThat(activeAssignment.getAssignmentEndDate()).isEqualTo(LocalDate.of(2026, 7, 14));
@@ -159,6 +180,7 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadRejectsWhenResourceIsActiveInADifferentProject() {
+        stubAllRolesValid();
         MasterResource resource = new MasterResource("1");
         setId(resource, 1L);
         resource.setDateOfJoining(LocalDate.of(2026, 1, 1));
@@ -171,11 +193,11 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Lead", "Bengaluru", LocalDate.of(2026, 8, 1), null,
-                Map.of("Year-1", 150000.0), "RFP", "NA", true);
+                "RFP", "NA", true);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         // Still active on P1 -> uploading under P2 is rejected, not auto-reassigned.
-        assertThatThrownBy(() -> service.upload(anyFile(), "P2"))
+        assertThatThrownBy(() -> service.upload(anyFile(), "P2", "ORG1"))
                 .isInstanceOf(com.example.leavemanagement.exception.BadRequestException.class)
                 .hasMessage("Resource 1 is already assigned to Project P1.\n"
                         + "Please release the resource from Project P1 before assigning it to another project.");
@@ -186,6 +208,7 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadAllowsReassignmentAfterReleaseFromPreviousProject() {
+        stubAllRolesValid();
         MasterResource resource = new MasterResource("1");
         setId(resource, 1L);
         resource.setDateOfJoining(LocalDate.of(2026, 1, 1));
@@ -197,10 +220,10 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Lead", "Bengaluru", LocalDate.of(2026, 8, 1), null,
-                Map.of("Year-1", 150000.0), "RFP", "NA", true);
+                "RFP", "NA", true);
         when(parser.parse(any())).thenReturn(List.of(row));
 
-        service.upload(anyFile(), "P2");
+        service.upload(anyFile(), "P2", "ORG1");
 
         ArgumentCaptor<ProjectResource> captor = ArgumentCaptor.forClass(ProjectResource.class);
         verify(projectResourceRepository, times(1)).save(captor.capture());
@@ -210,6 +233,7 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadWithLastWorkingDayClosesActiveAssignmentWithoutOpeningNew() {
+        stubAllRolesValid();
         MasterResource resource = new MasterResource("1");
         setId(resource, 1L);
         resource.setDateOfJoining(LocalDate.of(2026, 1, 1));
@@ -223,10 +247,10 @@ class MasterResourceServiceTest {
         // Resignation — Last Day of Working now set.
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Crypto Lead", "Bengaluru", LocalDate.of(2026, 1, 1),
-                LocalDate.of(2026, 8, 30), Map.of("Year-1", 100874.0), "RFP", "NA", false);
+                LocalDate.of(2026, 8, 30), "RFP", "NA", false);
         when(parser.parse(any())).thenReturn(List.of(row));
 
-        service.upload(anyFile(), "P1");
+        service.upload(anyFile(), "P1", "ORG1");
 
         verify(projectResourceRepository, times(1)).save(any());
         assertThat(activeAssignment.isActive()).isFalse();
@@ -235,6 +259,7 @@ class MasterResourceServiceTest {
 
     @Test
     void uploadRejoinAfterResignationInsertsNewAssignment() {
+        stubAllRolesValid();
         MasterResource resource = new MasterResource("1");
         setId(resource, 1L);
         resource.setDateOfJoining(LocalDate.of(2026, 1, 1));
@@ -246,10 +271,10 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Architect", "Bengaluru", LocalDate.of(2026, 10, 15), null,
-                Map.of("Year-1", 160000.0), "RFP", "NA", true);
+                "RFP", "NA", true);
         when(parser.parse(any())).thenReturn(List.of(row));
 
-        service.upload(anyFile(), "P1");
+        service.upload(anyFile(), "P1", "ORG1");
 
         ArgumentCaptor<ProjectResource> captor = ArgumentCaptor.forClass(ProjectResource.class);
         verify(projectResourceRepository, times(1)).save(captor.capture());

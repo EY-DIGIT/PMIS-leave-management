@@ -17,89 +17,95 @@ class ResourceParserTest {
 
     private final ResourceParser parser = new ResourceParser();
 
+    /**
+     * New column layout (HEADER_ROWS = 1, no year-rate columns):
+     * A=Attendance ID, B=Employee Name, C=Role, D=Location,
+     * E=Date of Joining, F=Last Day of Working, G=Category, H=CCN/ASG Details
+     */
     @Test
-    void parsesActiveAndRelievedRowsWithRateCardByYear() {
+    void parsesActiveAndRelievedRows() {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Resources");
 
-            // Row 0: merged group headings (content doesn't matter to the parser, just skipped).
-            Row group = sheet.createRow(0);
-            group.createCell(0).setCellValue("Resource details");
-            group.createCell(6).setCellValue("Rate");
-            group.createCell(13).setCellValue("Category");
-
-            // Row 1: column labels (also skipped).
-            Row header = sheet.createRow(1);
+            // Row 0: column labels — 1 header row, skipped by HEADER_ROWS = 1.
+            Row header = sheet.createRow(0);
             header.createCell(0).setCellValue("Attendance ID");
             header.createCell(1).setCellValue("Employee Name");
             header.createCell(2).setCellValue("Role as per Contract");
             header.createCell(3).setCellValue("Location");
             header.createCell(4).setCellValue("Date of Joining");
             header.createCell(5).setCellValue("Last Day of Working");
-            for (int i = 0; i < 7; i++) {
-                header.createCell(6 + i).setCellValue("Year-" + (i + 1));
-            }
-            header.createCell(13).setCellValue("Category");
-            header.createCell(14).setCellValue("CCN / ASG details");
+            header.createCell(6).setCellValue("Category (RFP/CCN/ASG)");
+            header.createCell(7).setCellValue("CCN/ASG Details");
 
-            // Row 2: an active resource (blank Last Day of Working), full 7-year rate card.
-            Row r1 = sheet.createRow(2);
-            r1.createCell(0).setCellValue("1");
+            // Row 1: an active resource (blank Last Day of Working).
+            Row r1 = sheet.createRow(1);
+            r1.createCell(0).setCellValue("421");
             r1.createCell(1).setCellValue("Sanju");
             r1.createCell(2).setCellValue("Security Crypto Lead");
-            r1.createCell(3).setCellValue("Bengaluru");
+            r1.createCell(3).setCellValue("Chennai");
             r1.createCell(4).setCellValue("2026-01-01");
-            r1.createCell(6).setCellValue(100874);
-            r1.createCell(7).setCellValue(107594);
-            r1.createCell(8).setCellValue(116465);
-            r1.createCell(9).setCellValue(122862);
-            r1.createCell(10).setCellValue(129707);
-            r1.createCell(11).setCellValue(137031);
-            r1.createCell(12).setCellValue(144868);
-            r1.createCell(13).setCellValue("RFP");
-            r1.createCell(14).setCellValue("NA");
+            // column 5 blank (no last day)
+            r1.createCell(6).setCellValue("RFP");
+            r1.createCell(7).setCellValue("NA");
 
-            // Row 3: a relieved resource (Last Day of Working set), only 2 years of rates.
-            Row r2 = sheet.createRow(3);
-            r2.createCell(0).setCellValue("4");
+            // Row 2: a relieved resource (Last Day of Working set).
+            Row r2 = sheet.createRow(2);
+            r2.createCell(0).setCellValue("424");
             r2.createCell(1).setCellValue("Shreyas");
             r2.createCell(2).setCellValue("Build and Release Engineer");
             r2.createCell(3).setCellValue("Bengaluru");
             r2.createCell(4).setCellValue("2026-01-01");
             r2.createCell(5).setCellValue("2026-06-30");
-            r2.createCell(6).setCellValue(127481);
-            r2.createCell(7).setCellValue(136064);
-            r2.createCell(13).setCellValue("CCN");
-            r2.createCell(14).setCellValue("CCN001");
+            r2.createCell(6).setCellValue("CCN");
+            r2.createCell(7).setCellValue("CCN001");
 
-            // trailing blank row should be skipped
-            sheet.createRow(4);
+            // trailing blank row — should be skipped
+            sheet.createRow(3);
 
             List<ResourceRow> rows = parser.parse(toFile(wb));
 
             assertThat(rows).hasSize(2);
+
             ResourceRow active = rows.get(0);
-            assertThat(active.resId()).isEqualTo("1");
+            assertThat(active.resId()).isEqualTo("421");
             assertThat(active.name()).isEqualTo("Sanju");
             assertThat(active.role()).isEqualTo("Security Crypto Lead");
-            assertThat(active.location()).isEqualTo("Bengaluru");
+            assertThat(active.location()).isEqualTo("Chennai");
             assertThat(active.dateOfJoining()).isEqualTo(LocalDate.of(2026, 1, 1));
             assertThat(active.lastDayOfWorking()).isNull();
             assertThat(active.active()).isTrue();
-            assertThat(active.rateCardByYear())
-                    .hasSize(7)
-                    .containsEntry("Year-1", 100874d)
-                    .containsEntry("Year-7", 144868d);
             assertThat(active.category()).isEqualTo("RFP");
             assertThat(active.categoryDetails()).isEqualTo("NA");
 
             ResourceRow relieved = rows.get(1);
-            assertThat(relieved.resId()).isEqualTo("4");
+            assertThat(relieved.resId()).isEqualTo("424");
             assertThat(relieved.lastDayOfWorking()).isEqualTo(LocalDate.of(2026, 6, 30));
             assertThat(relieved.active()).isFalse();
-            assertThat(relieved.rateCardByYear()).hasSize(2).containsEntry("Year-1", 127481d);
             assertThat(relieved.category()).isEqualTo("CCN");
             assertThat(relieved.categoryDetails()).isEqualTo("CCN001");
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
+    /** Date cells exported from Excel often contain "2026-01-01 0:00:00" — strip the time part. */
+    @Test
+    void stripsTimeSuffixFromDateStrings() {
+        try (XSSFWorkbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Resources");
+            sheet.createRow(0).createCell(0).setCellValue("Attendance ID"); // header
+
+            Row r1 = sheet.createRow(1);
+            r1.createCell(0).setCellValue("421");
+            r1.createCell(1).setCellValue("Sanju");
+            r1.createCell(2).setCellValue("Security Crypto Lead");
+            r1.createCell(3).setCellValue("Chennai");
+            r1.createCell(4).setCellValue("2026-01-01 0:00:00"); // date with time suffix
+
+            List<ResourceRow> rows = parser.parse(toFile(wb));
+            assertThat(rows).hasSize(1);
+            assertThat(rows.get(0).dateOfJoining()).isEqualTo(LocalDate.of(2026, 1, 1));
         } catch (Exception ex) {
             throw new RuntimeException(ex);
         }
@@ -109,20 +115,17 @@ class ResourceParserTest {
     void resolvesAutofilledFormulaCellsToTheirCalculatedResultNotFormulaText() {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Resources");
-            sheet.createRow(0).createCell(0).setCellValue("Resource details");
-            Row header = sheet.createRow(1);
-            header.createCell(0).setCellValue("Attendance ID");
-            header.createCell(1).setCellValue("Employee Name");
+            sheet.createRow(0).createCell(0).setCellValue("Attendance ID"); // 1 header row
 
-            // Row 2: literal seed value.
-            Row r1 = sheet.createRow(2);
+            // Row 1: literal seed value.
+            Row r1 = sheet.createRow(1);
             r1.createCell(0).setCellValue(1);
             r1.createCell(1).setCellValue("Sanju");
             r1.createCell(4).setCellValue("2026-01-01");
 
-            // Row 3: Excel autofill drags down a relative formula "=A3+1" rather than a value.
-            Row r2 = sheet.createRow(3);
-            r2.createCell(0).setCellFormula("A3+1");
+            // Row 2: Excel autofill drags down "=A2+1" rather than a literal value.
+            Row r2 = sheet.createRow(2);
+            r2.createCell(0).setCellFormula("A2+1");
             r2.createCell(1).setCellValue("Subhman");
             r2.createCell(4).setCellValue("2026-01-01");
 
@@ -130,7 +133,6 @@ class ResourceParserTest {
 
             assertThat(rows).hasSize(2);
             assertThat(rows.get(0).resId()).isEqualTo("1");
-            // Must be the calculated result "2", not the raw formula text "A3+1".
             assertThat(rows.get(1).resId()).isEqualTo("2");
         } catch (Exception ex) {
             throw new RuntimeException(ex);
