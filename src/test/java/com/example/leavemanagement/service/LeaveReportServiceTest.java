@@ -141,22 +141,51 @@ class LeaveReportServiceTest {
     }
 
     @Test
-    void applyQuarterlyRelaxationRejectsDaysBeyondUnpaidLeave() {
+    void applyQuarterlyRelaxationClampsDaysBeyondUnpaidLeave() {
+        stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
+        when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 2))
+                .thenReturn(Optional.empty());
+        when(leaveRelaxationRepository.save(any())).thenAnswer(returnsFirstArg());
+
+        // Only 2 unpaid days exist; requesting 3 is silently clamped to 2.
+        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 3, null);
+        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request);
+
+        assertThat(result.relaxationLeave()).isEqualTo(2);
+        assertThat(result.unpaidLeave()).isEqualTo(0);
+
+        ArgumentCaptor<LeaveRelaxation> captor = ArgumentCaptor.forClass(LeaveRelaxation.class);
+        verify(leaveRelaxationRepository).save(captor.capture());
+        assertThat(captor.getValue().getRelaxationDays()).isEqualTo(2); // clamped, not 3
+    }
+
+    @Test
+    void applyQuarterlyRelaxationAccumulatesAcrossTwoCalls() {
         stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
 
-        // Only 2 unpaid leave days exist; requesting 3 days of relaxation is invalid.
-        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 3, null);
+        // First call: approve 1 of 2 available unpaid days.
+        LeaveRelaxation firstRecord = new LeaveRelaxation(
+                masterResourceRepository.findByResId("E1").orElseThrow(), "P1", 2026, 2);
+        firstRecord.setRelaxationDays(1); // simulates a previously saved record with 1 day
+        when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 2))
+                .thenReturn(Optional.of(firstRecord));
+        when(leaveRelaxationRepository.save(any())).thenAnswer(returnsFirstArg());
 
-        assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("relaxationDays must be between 0 and 2");
-        org.mockito.Mockito.verify(leaveRelaxationRepository, org.mockito.Mockito.never()).save(any());
+        // Second call: approve 1 more — should accumulate to 2 total, not overwrite.
+        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 1, null);
+        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request);
+
+        assertThat(result.relaxationLeave()).isEqualTo(2); // 1 prev + 1 new
+        assertThat(result.unpaidLeave()).isEqualTo(0);     // 2 total relaxation covers both unpaid days
+
+        ArgumentCaptor<LeaveRelaxation> captor = ArgumentCaptor.forClass(LeaveRelaxation.class);
+        verify(leaveRelaxationRepository).save(captor.capture());
+        assertThat(captor.getValue().getRelaxationDays()).isEqualTo(2); // cumulative total
     }
 
     @Test
     void applyQuarterlyRelaxationRejectsNegativeDays() {
-        stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
-
+        // No resource stubs needed — the guard throws before any repository is consulted.
         QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, -1, null);
 
         assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request)).isInstanceOf(BadRequestException.class);

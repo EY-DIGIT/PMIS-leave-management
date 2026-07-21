@@ -4,10 +4,10 @@ import com.example.leavemanagement.dto.StoredFileInfo;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
 import java.io.IOException;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -142,7 +142,8 @@ public class FileStorageService {
         Path target = safeResolve(subDir).resolve(stored);
         try {
             Files.createDirectories(target.getParent());
-            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+            // Use getBytes() — getInputStream() may be exhausted if the parser already read it.
+            Files.write(target, file.getBytes());
             String rel = storageRoot.relativize(target).toString().replace('\\', '/');
             return new StoredFileInfo(stored, rel, Files.size(target), lastModified(target), periodStart, periodEnd);
         } catch (IOException e) {

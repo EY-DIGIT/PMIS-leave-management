@@ -76,13 +76,15 @@ public class AttendanceController {
                             + "active assignment on this project. Optional — omit to leave rate years untouched.")
                     @RequestParam(required = false) String rateYear,
             @Parameter(description = "Attendance Excel file (.xlsx/.xls)") @RequestPart("file") MultipartFile file) {
-        AttendanceUploadResult result =
-                attendanceQueryService.upload(projectId, milestoneId, startDate, endDate, rateYear, file);
+        // Save the raw file first — before parse consumes the InputStream and before validation
+        // can reject the request — so the Excel is always archived for audit / re-processing.
         try {
             fileStorageService.saveAttendance(file, projectId, milestoneId, startDate, endDate);
         } catch (Exception e) {
             log.warn("Attendance file could not be saved to storage (NFS may be unavailable): {}", e.getMessage());
         }
+        AttendanceUploadResult result =
+                attendanceQueryService.upload(projectId, milestoneId, startDate, endDate, rateYear, file);
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
