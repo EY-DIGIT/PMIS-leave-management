@@ -262,7 +262,7 @@ class AttendanceQueryServiceTest {
                 continue;
             }
             AttendanceStatus status = day == 8 ? AttendanceStatus.A : AttendanceStatus.P;
-            rows.add(new Attendance(resource, "P1", "M1", date, status));
+            rows.add(new Attendance(resource, "P1", "M1", null, date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         eq(1L), eq(LocalDate.of(2026, 7, 1)), eq(LocalDate.of(2026, 7, 31))))
@@ -359,7 +359,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = !markedAbsent ? AttendanceStatus.A : AttendanceStatus.P;
             markedAbsent = true;
-            rows.add(new Attendance(resource, "P1", "M1", date, status));
+            rows.add(new Attendance(resource, "P1", "M1", null, date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
@@ -454,7 +454,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = absentMarked < 3 ? AttendanceStatus.A : AttendanceStatus.P;
             absentMarked++;
-            rows.add(new Attendance(resource, "P1", "M1", date, status));
+            rows.add(new Attendance(resource, "P1", "M1", null, date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
@@ -501,7 +501,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = julyAbsentMarked < 1 ? AttendanceStatus.A : AttendanceStatus.P;
             julyAbsentMarked++;
-            julyRows.add(new Attendance(resource, "P1", "M1", date, status));
+            julyRows.add(new Attendance(resource, "P1", "M1", null, date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
@@ -517,7 +517,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = augustAbsentMarked < 2 ? AttendanceStatus.A : AttendanceStatus.P;
             augustAbsentMarked++;
-            augustRows.add(new Attendance(resource, "P1", "M1", date, status));
+            augustRows.add(new Attendance(resource, "P1", "M1", null, date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
@@ -547,13 +547,13 @@ class AttendanceQueryServiceTest {
         resource.setName("Resource A");
         setId(resource, 1L);
         List<Attendance> rows = List.of(
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 5, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 5, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 5, 3), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 6, 14), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 6, 17), AttendanceStatus.A));
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 5, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 5, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 5, 3), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 6, 14), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 6, 17), AttendanceStatus.A));
         when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
                 .thenReturn(rows);
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
@@ -583,13 +583,13 @@ class AttendanceQueryServiceTest {
         resource.setName("Resource A");
         setId(resource, 1L);
         List<Attendance> q2Rows = List.of(
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 3), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 4, 4), AttendanceStatus.A));
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 3), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 4), AttendanceStatus.A));
         List<Attendance> q1Rows = List.of(
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 1, 8), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", LocalDate.of(2024, 1, 9), AttendanceStatus.A));
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 1, 8), AttendanceStatus.A),
+                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 1, 9), AttendanceStatus.A));
         when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
                 .thenReturn(q2Rows);
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(

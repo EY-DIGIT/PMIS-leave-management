@@ -104,7 +104,7 @@ class LeaveReportServiceTest {
         when(publicHolidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
                 .thenReturn(List.of());
         List<Attendance> rows = absentDates.stream()
-                .map(date -> new Attendance(resource, projectId, "M1", date, AttendanceStatus.A))
+                .map(date -> new Attendance(resource, projectId, "M1", null, date, AttendanceStatus.A))
                 .toList();
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         id, LocalDate.of(2026, 4, 1), LocalDate.of(2026, 6, 30)))
