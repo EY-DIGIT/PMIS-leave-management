@@ -10,12 +10,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.leavemanagement.client.LeavePolicyClient;
+import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportSummary;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
+import com.example.leavemanagement.dto.ResourceCostResult;
 import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
@@ -268,10 +270,10 @@ class AttendanceQueryServiceTest {
                         eq(1L), eq(LocalDate.of(2026, 7, 1)), eq(LocalDate.of(2026, 7, 31))))
                 .thenReturn(rows);
 
-        List<AttendanceReportSummary> report = service.monthlyReport("P1", 2026, 7);
+        AttendanceReportResult report = service.monthlyReport("P1", 2026, 7);
 
-        assertThat(report).hasSize(1);
-        AttendanceReportSummary summary = report.get(0);
+        assertThat(report.resources()).hasSize(1);
+        AttendanceReportSummary summary = report.resources().get(0);
         assertThat(summary.attendanceId()).isEqualTo("E1");
         assertThat(summary.employeeName()).isEqualTo("Sanju");
         assertThat(summary.projectId()).isEqualTo("P1");
@@ -292,7 +294,8 @@ class AttendanceQueryServiceTest {
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
                 .thenReturn(List.of());
 
-        AttendanceReportSummary summary = service.employeeReport("E1", 2026, 7);
+        AttendanceReportResult result = service.employeeReport("E1", 2026, 7);
+        AttendanceReportSummary summary = result.resources().get(0);
 
         assertThat(summary.attendanceId()).isEqualTo("E1");
         assertThat(summary.projectId()).isEqualTo("P1");
@@ -323,10 +326,10 @@ class AttendanceQueryServiceTest {
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
                 .thenReturn(List.of());
 
-        List<AttendanceReportSummary> report = service.quarterlyReport(null, "E1", 2026, 3);
+        AttendanceReportResult report = service.quarterlyReport(null, "E1", 2026, 3);
 
-        assertThat(report).hasSize(1);
-        assertThat(report.get(0).period()).isEqualTo("Q3 2026");
+        assertThat(report.resources()).hasSize(1);
+        assertThat(report.resources().get(0).period()).isEqualTo("Q3 2026");
     }
 
     // ------------------------------------------------------------------
@@ -411,10 +414,10 @@ class AttendanceQueryServiceTest {
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
                 .thenReturn(List.of());
 
-        List<ResourceCostSummary> report = service.quarterlyCostReport(null, "E1", 2026, 3);
+        ResourceCostResult report = service.quarterlyCostReport(null, "E1", 2026, 3);
 
-        assertThat(report).hasSize(1);
-        ResourceCostSummary summary = report.get(0);
+        assertThat(report.resources()).hasSize(1);
+        ResourceCostSummary summary = report.resources().get(0);
         assertThat(summary.period()).isEqualTo("Q3 2026");
         assertThat(summary.monthlyBreakdown()).hasSize(3);
         // No attendance rows -> 0 present days every month -> total cost 0.

@@ -19,6 +19,7 @@ import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.security.CurrentUser;
 import com.example.leavemanagement.security.CurrentUserContext;
+import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -27,6 +28,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class LeaveReportService {
@@ -114,7 +116,8 @@ public class LeaveReportService {
      * </pre>
      */
     @Transactional
-    public EmployeeLeaveDetail applyQuarterlyRelaxation(QuarterlyRelaxationRequest request) {
+    public EmployeeLeaveDetail applyQuarterlyRelaxation(
+            QuarterlyRelaxationRequest request, MultipartFile attachment) {
         if (request.relaxationDays() < 0) {
             throw new BadRequestException("relaxationDays must be >= 0");
         }
@@ -148,6 +151,15 @@ public class LeaveReportService {
         relaxation.setFinalPaidLeave(raw.paidLeave());
         relaxation.setFinalUnpaidLeave(newFinalUnpaid);
         relaxation.setRemarks(request.remarks());
+        if (attachment != null && !attachment.isEmpty()) {
+            try {
+                relaxation.setAttachmentName(attachment.getOriginalFilename());
+                relaxation.setAttachmentContentType(attachment.getContentType());
+                relaxation.setAttachmentData(attachment.getBytes());
+            } catch (IOException e) {
+                throw new BadRequestException("Failed to read attachment: " + e.getMessage());
+            }
+        }
         relaxation.setApprovedBy(currentUserIdentifier());
         relaxation.setApprovedAt(LocalDateTime.now());
         // Always use the entity returned by save() — JPA merge can return a different managed
@@ -156,6 +168,20 @@ public class LeaveReportService {
         relaxation = leaveRelaxationRepository.save(relaxation);
 
         return applyRelaxation(raw, relaxation);
+    }
+
+    /** Returns the stored evidence attachment for a relaxation record, or throws if none exists. */
+    @Transactional(readOnly = true)
+    public LeaveRelaxation getRelaxationAttachment(
+            String resourceId, String projectId, int year, int quarter) {
+        LeaveRelaxation relaxation = leaveRelaxationRepository
+                .findByResource_ResIdAndProjectIdAndYearAndQuarter(resourceId, projectId, year, quarter)
+                .orElseThrow(() -> new NotFoundException(
+                        "No relaxation record for " + resourceId + " Q" + quarter + " " + year));
+        if (relaxation.getAttachmentData() == null) {
+            throw new NotFoundException("No attachment on this relaxation record");
+        }
+        return relaxation;
     }
 
     /** Looks up a recorded relaxation for this resource/project/quarter and applies it, if any. */

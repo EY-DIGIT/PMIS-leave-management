@@ -1,12 +1,12 @@
 package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.MonthlyResourceCost;
-import com.example.leavemanagement.dto.ResourceCostSummary;
+import com.example.leavemanagement.dto.ResourceCostResult;
+import java.util.List;
 import com.example.leavemanagement.service.AttendanceQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -66,7 +66,7 @@ public class ResourceCostController {
                     + "3 months, computed separately per month rather than blended over the quarter. Calendar "
                     + "quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec.")
     @GetMapping("/quarterly")
-    public List<ResourceCostSummary> quarterlyCostReport(
+    public ResourceCostResult quarterlyCostReport(
             @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
                     String projectId,
             @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
@@ -87,7 +87,7 @@ public class ResourceCostController {
                     + "dashboard (one summary per active resource). Each summary's totalCost is the sum of its "
                     + "12 months, computed separately per month rather than blended over the year.")
     @GetMapping("/yearly")
-    public List<ResourceCostSummary> yearlyCostReport(
+    public ResourceCostResult yearlyCostReport(
             @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
                     String projectId,
             @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)

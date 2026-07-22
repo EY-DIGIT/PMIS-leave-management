@@ -122,7 +122,7 @@ class LeaveReportServiceTest {
 
         QuarterlyRelaxationRequest request =
                 new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 1, "Approved by UIDAI on medical grounds.");
-        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request);
+        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request, null);
 
         assertThat(result.paidLeave()).isEqualTo(6);
         assertThat(result.relaxationLeave()).isEqualTo(1);
@@ -149,7 +149,7 @@ class LeaveReportServiceTest {
 
         // Only 2 unpaid days exist; requesting 3 is silently clamped to 2.
         QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 3, null);
-        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request);
+        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request, null);
 
         assertThat(result.relaxationLeave()).isEqualTo(2);
         assertThat(result.unpaidLeave()).isEqualTo(0);
@@ -173,7 +173,7 @@ class LeaveReportServiceTest {
 
         // Second call: approve 1 more — should accumulate to 2 total, not overwrite.
         QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 1, null);
-        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request);
+        EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request, null);
 
         assertThat(result.relaxationLeave()).isEqualTo(2); // 1 prev + 1 new
         assertThat(result.unpaidLeave()).isEqualTo(0);     // 2 total relaxation covers both unpaid days
@@ -188,7 +188,7 @@ class LeaveReportServiceTest {
         // No resource stubs needed — the guard throws before any repository is consulted.
         QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, -1, null);
 
-        assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request)).isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request, null)).isInstanceOf(BadRequestException.class);
     }
 
     @Test

@@ -78,6 +78,15 @@ public class LeaveRelaxation {
     @Column(name = "remarks", length = 1000)
     private String remarks;
 
+    @Column(name = "attachment_name", length = 255)
+    private String attachmentName;
+
+    @Column(name = "attachment_content_type", length = 100)
+    private String attachmentContentType;
+
+    @Column(name = "attachment_data", columnDefinition = "BYTEA")
+    private byte[] attachmentData;
+
     @Column(name = "approved_by", length = 200)
     private String approvedBy;
 

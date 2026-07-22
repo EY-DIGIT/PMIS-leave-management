@@ -1,14 +1,18 @@
 package com.example.leavemanagement.service;
 
 import com.example.leavemanagement.client.LeavePolicyClient;
+import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportSummary;
+import com.example.leavemanagement.dto.AttendanceReportTotals;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
+import com.example.leavemanagement.dto.ResourceCostResult;
 import com.example.leavemanagement.dto.ResourceCostSummary;
+import com.example.leavemanagement.dto.ResourceCostTotals;
 import com.example.leavemanagement.dto.ResourceQuarterSettlement;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
@@ -246,7 +250,7 @@ public class AttendanceQueryService {
 
     /** Dashboard: one summary per resource currently active on the project, for one month. */
     @Transactional(readOnly = true)
-    public List<AttendanceReportSummary> monthlyReport(String projectId, int year, int month) {
+    public AttendanceReportResult monthlyReport(String projectId, int year, int month) {
         validateMonthAndYear(year, month);
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
@@ -255,11 +259,13 @@ public class AttendanceQueryService {
 
     /** One resource's summary for one month. */
     @Transactional(readOnly = true)
-    public AttendanceReportSummary employeeReport(String resourceId, int year, int month) {
+    public AttendanceReportResult employeeReport(String resourceId, int year, int month) {
         validateMonthAndYear(year, month);
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
-        return employeeSummary(resourceId, start, end, start.format(MONTH_YEAR), 1);
+        AttendanceReportSummary summary = employeeSummary(resourceId, start, end, start.format(MONTH_YEAR), 1);
+        List<AttendanceReportSummary> rows = List.of(summary);
+        return new AttendanceReportResult(summary.period(), 1, buildAttendanceTotals(rows), rows);
     }
 
     /**
@@ -267,7 +273,7 @@ public class AttendanceQueryService {
      * projectId} for the project dashboard (one summary per active resource).
      */
     @Transactional(readOnly = true)
-    public List<AttendanceReportSummary> quarterlyReport(String projectId, String resourceId, int year, int quarter) {
+    public AttendanceReportResult quarterlyReport(String projectId, String resourceId, int year, int quarter) {
         if (quarter < 1 || quarter > 4) {
             throw new BadRequestException("quarter must be between 1 and 4");
         }
@@ -283,7 +289,7 @@ public class AttendanceQueryService {
      * projectId} for the project dashboard (one summary per active resource).
      */
     @Transactional(readOnly = true)
-    public List<AttendanceReportSummary> yearlyReport(String projectId, String resourceId, int year) {
+    public AttendanceReportResult yearlyReport(String projectId, String resourceId, int year) {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
@@ -292,11 +298,14 @@ public class AttendanceQueryService {
         return scopedReport(projectId, resourceId, start, end, String.valueOf(year), 12);
     }
 
-    private List<AttendanceReportSummary> scopedReport(
+    private AttendanceReportResult scopedReport(
             String projectId, String resourceId, LocalDate start, LocalDate end,
             String periodLabel, int numberOfMonths) {
         if (resourceId != null && !resourceId.isBlank()) {
-            return List.of(employeeSummary(resourceId, start, end, periodLabel, numberOfMonths));
+            AttendanceReportSummary summary =
+                    employeeSummary(resourceId, start, end, periodLabel, numberOfMonths);
+            List<AttendanceReportSummary> rows = List.of(summary);
+            return new AttendanceReportResult(periodLabel, 1, buildAttendanceTotals(rows), rows);
         }
         if (projectId == null || projectId.isBlank()) {
             throw new BadRequestException("projectId or resourceId is required");
@@ -304,13 +313,14 @@ public class AttendanceQueryService {
         return projectDashboard(projectId, start, end, periodLabel, numberOfMonths);
     }
 
-    private List<AttendanceReportSummary> projectDashboard(
+    private AttendanceReportResult projectDashboard(
             String projectId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
-        return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+        List<AttendanceReportSummary> rows = projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
                 .map(ProjectResource::getResource)
                 .map(resource -> buildSummary(resource, projectId, start, end, periodLabel, leaveLimit))
                 .toList();
+        return new AttendanceReportResult(periodLabel, rows.size(), buildAttendanceTotals(rows), rows);
     }
 
     private AttendanceReportSummary employeeSummary(
@@ -324,6 +334,26 @@ public class AttendanceQueryService {
                 .orElse(null);
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
         return buildSummary(resource, projectId, start, end, periodLabel, leaveLimit);
+    }
+
+    private AttendanceReportTotals buildAttendanceTotals(List<AttendanceReportSummary> rows) {
+        if (rows.isEmpty()) {
+            return new AttendanceReportTotals(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        int workingDays   = rows.get(0).workingDays(); // same for all on the same project/calendar
+        double presentSum = rows.stream().mapToDouble(AttendanceReportSummary::presentDays).sum();
+        int halfSum       = rows.stream().mapToInt(AttendanceReportSummary::halfDays).sum();
+        int leaveSum      = rows.stream().mapToInt(AttendanceReportSummary::leaveDays).sum();
+        int absentSum     = rows.stream().mapToInt(AttendanceReportSummary::absentDays).sum();
+        int wfhSum        = rows.stream().mapToInt(AttendanceReportSummary::wfhDays).sum();
+        double paidSum    = rows.stream().mapToDouble(AttendanceReportSummary::paidLeaveDays).sum();
+        double unpaidSum  = rows.stream().mapToDouble(AttendanceReportSummary::unpaidLeaveDays).sum();
+        double avgAtt     = Math.round(
+                rows.stream().mapToDouble(AttendanceReportSummary::attendancePercentage).average().orElse(0) * 100)
+                / 100.0;
+        return new AttendanceReportTotals(
+                rows.size(), workingDays, presentSum, halfSum, leaveSum, absentSum, wfhSum,
+                paidSum, unpaidSum, avgAtt);
     }
 
     /**
@@ -444,7 +474,7 @@ public class AttendanceQueryService {
      * projectId} for the project dashboard (one summary per active resource).
      */
     @Transactional(readOnly = true)
-    public List<ResourceCostSummary> quarterlyCostReport(String projectId, String resourceId, int year, int quarter) {
+    public ResourceCostResult quarterlyCostReport(String projectId, String resourceId, int year, int quarter) {
         if (quarter < 1 || quarter > 4) {
             throw new BadRequestException("quarter must be between 1 and 4");
         }
@@ -457,7 +487,7 @@ public class AttendanceQueryService {
      * for the project dashboard (one summary per active resource).
      */
     @Transactional(readOnly = true)
-    public List<ResourceCostSummary> yearlyCostReport(String projectId, String resourceId, int year) {
+    public ResourceCostResult yearlyCostReport(String projectId, String resourceId, int year) {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
@@ -465,8 +495,9 @@ public class AttendanceQueryService {
         return costSummaryReport(projectId, resourceId, year, months, String.valueOf(year));
     }
 
-    private List<ResourceCostSummary> costSummaryReport(
+    private ResourceCostResult costSummaryReport(
             String projectId, String resourceId, int year, List<Integer> months, String periodLabel) {
+        List<ResourceCostSummary> rows;
         if (resourceId != null && !resourceId.isBlank()) {
             MasterResource resource = masterResourceRepository
                     .findByResId(resourceId)
@@ -477,15 +508,26 @@ public class AttendanceQueryService {
                             .findByResourceIdAndActiveTrue(resource.getId())
                             .map(ProjectResource::getProjectId)
                             .orElse(null);
-            return List.of(buildCostSummary(resource, resolvedProjectId, year, months, periodLabel));
+            rows = List.of(buildCostSummary(resource, resolvedProjectId, year, months, periodLabel));
+        } else {
+            if (projectId == null || projectId.isBlank()) {
+                throw new BadRequestException("projectId or resourceId is required");
+            }
+            rows = projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+                    .map(ProjectResource::getResource)
+                    .map(resource -> buildCostSummary(resource, projectId, year, months, periodLabel))
+                    .toList();
         }
-        if (projectId == null || projectId.isBlank()) {
-            throw new BadRequestException("projectId or resourceId is required");
-        }
-        return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
-                .map(ProjectResource::getResource)
-                .map(resource -> buildCostSummary(resource, projectId, year, months, periodLabel))
-                .toList();
+        return new ResourceCostResult(periodLabel, rows.size(), buildCostTotals(rows), rows);
+    }
+
+    private ResourceCostTotals buildCostTotals(List<ResourceCostSummary> rows) {
+        double totalCost      = round2(rows.stream().mapToDouble(ResourceCostSummary::totalCost).sum());
+        double totalDeducted  = round2(rows.stream()
+                .flatMap(r -> r.monthlyBreakdown().stream())
+                .mapToDouble(MonthlyResourceCost::deductedAmount)
+                .sum());
+        return new ResourceCostTotals(rows.size(), totalCost, totalDeducted);
     }
 
     private ResourceCostSummary buildCostSummary(

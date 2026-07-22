@@ -1,10 +1,12 @@
 package com.example.leavemanagement.controller;
 
-import com.example.leavemanagement.dto.AttendanceReportSummary;
+import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
+import com.example.leavemanagement.dto.ResourceCostResult;
+import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.service.AttendanceQueryService;
 import com.example.leavemanagement.service.FileStorageService;
 import com.example.leavemanagement.service.LeaveReportService;
@@ -13,16 +15,16 @@ import org.slf4j.LoggerFactory;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -99,7 +101,7 @@ public class AttendanceController {
             description = "One AttendanceReportSummary per resource currently active on 'projectId', for the "
                     + "given month.")
     @GetMapping("/report/monthly")
-    public List<AttendanceReportSummary> monthlyReport(
+    public AttendanceReportResult monthlyReport(
             @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Month (1-12)", example = "7") @RequestParam("month") int month) {
@@ -112,7 +114,7 @@ public class AttendanceController {
      */
     @Operation(summary = "One resource's monthly attendance report")
     @GetMapping("/report/employee")
-    public AttendanceReportSummary employeeReport(
+    public AttendanceReportResult employeeReport(
             @Parameter(description = "res_id (Attendance ID)") @RequestParam("resourceId") String resourceId,
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Month (1-12)", example = "7") @RequestParam("month") int month) {
@@ -129,7 +131,7 @@ public class AttendanceController {
                     + "(one summary per active resource). Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, "
                     + "Q4 Oct-Dec.")
     @GetMapping("/report/quarterly")
-    public List<AttendanceReportSummary> quarterlyReport(
+    public AttendanceReportResult quarterlyReport(
             @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
                     String projectId,
             @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
@@ -148,7 +150,7 @@ public class AttendanceController {
             description = "Pass resourceId for one resource's summary, or projectId for the project dashboard "
                     + "(one summary per active resource).")
     @GetMapping("/report/yearly")
-    public List<AttendanceReportSummary> yearlyReport(
+    public AttendanceReportResult yearlyReport(
             @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
                     String projectId,
             @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
@@ -178,17 +180,55 @@ public class AttendanceController {
 
     /**
      * Records UIDAI's final leave-relaxation decision for one resource's quarter.
-     * POST /api/attendance/quarterly-relaxation
+     * POST /api/attendance/quarterly-relaxation (multipart/form-data)
+     * An optional evidence file (PDF, image, etc.) may be attached as the "attachment" part.
      */
     @Operation(
             summary = "Record a quarterly leave-relaxation approval",
             description = "Each call adds relaxationDays to the running cumulative total for this "
                     + "resource/project/quarter, moving that many days from unpaid leave into relaxation leave. "
                     + "Paid leave is never changed. The increment is automatically clamped to the remaining "
-                    + "unpaid leave so it is impossible to approve more than exists. Returns the recalculated "
-                    + "quarterly settlement showing the updated relaxationLeave and unpaidLeave.")
-    @PostMapping("/quarterly-relaxation")
-    public EmployeeLeaveDetail quarterlyRelaxation(@Valid @RequestBody QuarterlyRelaxationRequest request) {
-        return leaveReportService.applyQuarterlyRelaxation(request);
+                    + "unpaid leave so it is impossible to approve more than exists. An optional evidence file "
+                    + "can be attached as the 'attachment' part. Returns the recalculated quarterly settlement "
+                    + "showing the updated relaxationLeave and unpaidLeave.")
+    @PostMapping(value = "/quarterly-relaxation", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public EmployeeLeaveDetail quarterlyRelaxation(
+            @Parameter(description = "res_id of the resource") @RequestParam String resourceId,
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Year", example = "2026") @RequestParam int year,
+            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter,
+            @Parameter(description = "Days to move from unpaid → relaxation (supports 0.5)", example = "0.5")
+                    @RequestParam double relaxationDays,
+            @Parameter(description = "Reason / remarks") @RequestParam(required = false) String remarks,
+            @Parameter(description = "Evidence file (PDF, image, etc.)")
+                    @RequestPart(value = "attachment", required = false) MultipartFile attachment) {
+        QuarterlyRelaxationRequest request =
+                new QuarterlyRelaxationRequest(resourceId, projectId, year, quarter, relaxationDays, remarks);
+        return leaveReportService.applyQuarterlyRelaxation(request, attachment);
+    }
+
+    /**
+     * Downloads the evidence attachment for a recorded relaxation.
+     * GET /api/attendance/quarterly-relaxation/attachment?resourceId=&projectId=&year=&quarter=
+     */
+    @Operation(summary = "Download the evidence attachment for a relaxation record")
+    @GetMapping("/quarterly-relaxation/attachment")
+    public ResponseEntity<byte[]> relaxationAttachment(
+            @Parameter(description = "res_id of the resource") @RequestParam String resourceId,
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Year", example = "2026") @RequestParam int year,
+            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter) {
+        LeaveRelaxation relaxation =
+                leaveReportService.getRelaxationAttachment(resourceId, projectId, year, quarter);
+        String contentType = relaxation.getAttachmentContentType() != null
+                ? relaxation.getAttachmentContentType()
+                : MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        String filename = relaxation.getAttachmentName() != null
+                ? relaxation.getAttachmentName()
+                : "attachment";
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType(contentType));
+        headers.setContentDisposition(ContentDisposition.attachment().filename(filename).build());
+        return new ResponseEntity<>(relaxation.getAttachmentData(), headers, HttpStatus.OK);
     }
 }
