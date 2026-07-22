@@ -219,6 +219,7 @@ public class LeaveReportService {
                 raw.sandwichDays(),
                 Math.max(0.0, raw.totalUnpaidDays() - relaxDays),
                 raw.lapsedLeave(),
+                raw.halfDayDates(),
                 raw.paidLeaveDates(),
                 raw.unpaidLeaveDates(),
                 raw.sandwichDates());
@@ -279,6 +280,7 @@ public class LeaveReportService {
                 quarterLeaveResolver.calculate(resourceId, projectId, joiningDate, year, quarter,
                         absentDates, halfDayDates);
 
+        List<LocalDate> sortedHalfDayDates = halfDayDates.stream().sorted().toList();
         return new EmployeeLeaveDetail(
                 attendanceId,
                 employeeName,
@@ -298,6 +300,7 @@ public class LeaveReportService {
                 calc.sandwichDays(),
                 calc.totalUnpaidDays(),
                 calc.lapsedLeaveDays(),
+                sortedHalfDayDates,
                 calc.paidLeaveDates(),
                 calc.unpaidLeaveDates(),
                 calc.sandwichDates());

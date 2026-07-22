@@ -179,6 +179,27 @@ public class AttendanceController {
     }
 
     /**
+     * Per-employee quarterly leave dates: paid leave, half-day, and sandwich-charged dates.
+     * GET /api/attendance/leave-dates?resourceId=E1&year=2026&quarter=3
+     */
+    @Operation(
+            summary = "Quarterly leave dates for one employee",
+            description = "Returns the actual calendar dates of paid leaves, half-days, unpaid leaves, and "
+                    + "sandwich-charged non-working days for the given resource and quarter. Relaxation already "
+                    + "applied is reflected in the scalar counters; the date lists are not affected by relaxation "
+                    + "(sandwich and unpaid dates are still the raw policy output). "
+                    + "Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec.")
+    @GetMapping("/leave-dates")
+    public EmployeeLeaveDetail leaveDates(
+            @Parameter(description = "res_id of the employee") @RequestParam String resourceId,
+            @Parameter(description = "Year", example = "2026") @RequestParam int year,
+            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter,
+            @Parameter(description = "Restrict to this project id") @RequestParam(required = false)
+                    String projectId) {
+        return leaveReportService.employeeDetail(resourceId, year, quarter, projectId);
+    }
+
+    /**
      * Records UIDAI's final leave-relaxation decision for one resource's quarter.
      * POST /api/attendance/quarterly-relaxation (multipart/form-data)
      * An optional evidence file (PDF, image, etc.) may be attached as the "attachment" part.

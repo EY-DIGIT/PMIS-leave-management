@@ -6,4 +6,5 @@ package com.example.leavemanagement.dto;
 public record ResourceCostTotals(
         int resourceCount,
         double totalCost,
+        double totalRelaxationAmount,
         double totalDeductedAmount) {}

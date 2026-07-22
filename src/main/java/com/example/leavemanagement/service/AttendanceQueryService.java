@@ -522,24 +522,61 @@ public class AttendanceQueryService {
     }
 
     private ResourceCostTotals buildCostTotals(List<ResourceCostSummary> rows) {
-        double totalCost      = round2(rows.stream().mapToDouble(ResourceCostSummary::totalCost).sum());
-        double totalDeducted  = round2(rows.stream()
+        double totalCost             = round2(rows.stream().mapToDouble(ResourceCostSummary::totalCost).sum());
+        double totalRelaxationAmount = round2(rows.stream().mapToDouble(ResourceCostSummary::relaxationAmount).sum());
+        double totalDeducted         = round2(rows.stream()
                 .flatMap(r -> r.monthlyBreakdown().stream())
                 .mapToDouble(MonthlyResourceCost::deductedAmount)
                 .sum());
-        return new ResourceCostTotals(rows.size(), totalCost, totalDeducted);
+        return new ResourceCostTotals(rows.size(), totalCost, totalRelaxationAmount, totalDeducted);
     }
 
     private ResourceCostSummary buildCostSummary(
             MasterResource resource, String projectId, int year, List<Integer> months, String periodLabel) {
         List<MonthlyResourceCost> monthly = months.stream()
-                .map(month -> {
-                    LocalDate monthStart = LocalDate.of(year, month, 1);
-                    return buildMonthlyCost(resource, projectId, monthStart, monthStart.format(MONTH_YEAR));
-                })
+                .map(month -> buildMonthlyCost(resource, projectId, LocalDate.of(year, month, 1),
+                        LocalDate.of(year, month, 1).format(MONTH_YEAR)))
                 .toList();
-        double totalCost = round2(monthly.stream().mapToDouble(MonthlyResourceCost::cost).sum());
-        return new ResourceCostSummary(resource.getResId(), resource.getName(), projectId, periodLabel, totalCost, monthly);
+
+        double sumMonthlyCost = monthly.stream().mapToDouble(MonthlyResourceCost::cost).sum();
+
+        // Relaxation is a quarterly settlement, not monthly. For each quarter covered by the
+        // months list, compute: perDayRate = quarterlyRate / quarterWorkingDays, then
+        // relaxationAmount = relaxationDays × perDayRate.
+        Set<Integer> quarters = months.stream()
+                .map(m -> (m - 1) / 3 + 1)
+                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+
+        double totalRelaxationDays   = 0;
+        double totalRelaxationAmount = 0;
+        for (int quarter : quarters) {
+            // Collect the monthly cost rows that belong to this quarter.
+            List<MonthlyResourceCost> quarterMonths = new ArrayList<>();
+            for (int i = 0; i < months.size(); i++) {
+                if ((months.get(i) - 1) / 3 + 1 == quarter) {
+                    quarterMonths.add(monthly.get(i));
+                }
+            }
+            double quarterWorkingDays = quarterMonths.stream().mapToInt(MonthlyResourceCost::workingDays).sum();
+            double quarterlyRate      = quarterMonths.stream().mapToDouble(MonthlyResourceCost::monthlyRate).sum();
+
+            if (quarterWorkingDays > 0 && quarterlyRate > 0 && projectId != null) {
+                LeaveRelaxation relaxation = leaveRelaxationRepository
+                        .findByResource_ResIdAndProjectIdAndYearAndQuarter(
+                                resource.getResId(), projectId, year, quarter)
+                        .orElse(null);
+                if (relaxation != null && relaxation.getRelaxationDays() > 0) {
+                    double perDayRate = quarterlyRate / quarterWorkingDays;
+                    totalRelaxationDays   += relaxation.getRelaxationDays();
+                    totalRelaxationAmount += relaxation.getRelaxationDays() * perDayRate;
+                }
+            }
+        }
+
+        double totalCost = round2(sumMonthlyCost + totalRelaxationAmount);
+        return new ResourceCostSummary(
+                resource.getResId(), resource.getName(), projectId, periodLabel,
+                totalCost, totalRelaxationDays, round2(totalRelaxationAmount), monthly);
     }
 
     private MonthlyResourceCost buildMonthlyCost(
@@ -567,18 +604,13 @@ public class AttendanceQueryService {
                 : null;
         double rate = monthlyRate != null ? monthlyRate : 0d;
 
-        double relaxationDaysApplied =
-                relaxationDaysAppliedToMonth(resource, projectId, monthStart, attendance.absentDays());
-
-        // paidLeaveDays = MIN(absentDays + halfDays/2, monthlyLeaveAllowance) — computed in buildSummary.
-        // presentDays already includes the worked half-day portion (HD×0.5), so no separate halfDays*0.5 term.
-        // effectivePaidDays: effective present + leave-covered absence + relaxation.
+        // Relaxation is settled quarterly, not monthly — it is NOT added to effectivePaidDays here.
+        // See buildCostSummary for the quarterly relaxationAmount calculation.
         double paidLeaveDaysApplied = attendance.paidLeaveDays();
         double effectivePaidDays = Math.min(
                 attendance.workingDays(),
                 attendance.presentDays()        // P-days + HD×0.5 (worked portion)
-                        + paidLeaveDaysApplied  // leave-covered absent + half-day leave portion
-                        + relaxationDaysApplied);
+                        + paidLeaveDaysApplied); // leave-covered absent + half-day leave portion
         // Per-day unit price and derived breakup amounts (0 when there's no rate / no working days).
         double perDayRate = (monthlyRate != null && attendance.workingDays() > 0)
                 ? round2(monthlyRate / attendance.workingDays())
@@ -587,7 +619,7 @@ public class AttendanceQueryService {
         double cost = (monthlyRate != null && attendance.workingDays() > 0)
                 ? round2(monthlyRate * effectivePaidDays / attendance.workingDays())
                 : 0d;
-        // Amount lost to truly unpaid days = full month rate minus what's actually payable.
+        // Amount lost to unpaid days (before relaxation) = full month rate minus attendance-based cost.
         double deductedAmount = monthlyRate != null ? round2(rate - cost) : 0d;
 
         return new MonthlyResourceCost(
@@ -601,7 +633,6 @@ public class AttendanceQueryService {
                 attendance.halfDays(),
                 attendance.absentDays(),
                 paidLeaveDaysApplied,
-                relaxationDaysApplied,
                 round2(effectivePaidDays),
                 attendance.attendancePercentage(),
                 rate,
@@ -629,56 +660,6 @@ public class AttendanceQueryService {
             };
         }
         return 0;
-    }
-
-    /**
-     * This month's share of its quarter's recorded {@link LeaveRelaxation#getRelaxationDays()},
-     * via sequential fill: starting from the quarter's earliest month, each month absorbs
-     * relaxation days up to its own absent-day count before any remainder spills into the next
-     * month. Relaxation is recorded per quarter, not per day, so this is a deterministic way to
-     * spread it across months such that monthly costs sum exactly to the quarterly total.
-     */
-    private double relaxationDaysAppliedToMonth(
-            MasterResource resource, String projectId, LocalDate monthStart, int currentMonthAbsentDays) {
-        if (projectId == null) {
-            return 0.0;
-        }
-        int year = monthStart.getYear();
-        int month = monthStart.getMonthValue();
-        int quarter = (month - 1) / 3 + 1;
-
-        LeaveRelaxation relaxation = leaveRelaxationRepository
-                .findByResource_ResIdAndProjectIdAndYearAndQuarter(resource.getResId(), projectId, year, quarter)
-                .orElse(null);
-        if (relaxation == null || relaxation.getRelaxationDays() <= 0) {
-            return 0.0;
-        }
-
-        double remaining = relaxation.getRelaxationDays();
-        int firstMonthOfQuarter = quarter * 3 - 2;
-        int lastMonthOfQuarter = quarter * 3;
-        for (int m = firstMonthOfQuarter; m <= lastMonthOfQuarter; m++) {
-            int absentThisMonth;
-            if (m == month) {
-                absentThisMonth = currentMonthAbsentDays;
-            } else {
-                LocalDate ms = LocalDate.of(year, m, 1);
-                LocalDate me = ms.withDayOfMonth(ms.lengthOfMonth());
-                absentThisMonth = countAbsentDays(resource.getId(), ms, me);
-            }
-            double applied = Math.min(remaining, absentThisMonth);
-            if (m == month) {
-                return applied;
-            }
-            remaining -= applied;
-        }
-        return 0.0;
-    }
-
-    private int countAbsentDays(Long resourceId, LocalDate start, LocalDate end) {
-        return (int) attendanceRepository.findByResourceIdAndAttendanceDateBetween(resourceId, start, end).stream()
-                .filter(a -> a.getStatus() == AttendanceStatus.A)
-                .count();
     }
 
     private double round2(double value) {

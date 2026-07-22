@@ -17,8 +17,9 @@ package com.example.leavemanagement.dto;
  *   <li>{@code deductedAmount} — {@code monthlyRate - cost}, amount lost to truly unpaid days.
  * </ul>
  *
- * <p>{@code relaxationDaysApplied} is this month's share of the quarter's relaxation decision,
- * applied via sequential fill (oldest month first, capped at each month's own absent-day count).
+ * <p>Relaxation leave is a quarterly settlement, not a monthly one — it does not appear here.
+ * See {@link com.example.leavemanagement.dto.ResourceCostSummary} for the quarterly
+ * {@code relaxationAmount} that is added on top of the sum of monthly costs.
  * {@code monthlyRate} is looked up from the resource's active rate card by {@code rateYear}
  * (e.g. "Year-3"). All amounts are 0 when the resource has no active assignment, no rateYear set,
  * or no rate configured for that year.
@@ -34,7 +35,6 @@ public record MonthlyResourceCost(
         int halfDays,
         int absentDays,
         double paidLeaveDaysApplied,
-        double relaxationDaysApplied,
         double effectivePaidDays,
         double attendancePercentage,
         double monthlyRate,

@@ -21,7 +21,6 @@ import com.example.leavemanagement.dto.ResourceCostResult;
 import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
-import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.exception.AttendanceValidationException;
@@ -431,10 +430,11 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void relaxationReducesCostPenaltyWithinTheSameMonth() {
-        // July 2026: 23 working days, 3 absent (20 present). Quarterly relaxation = 2 days;
-        // July is the quarter's first month, so it absorbs min(2, 3) = 2 relaxation days.
-        // Effective present = 20 + 2 = 22 -> cost = 88200 * 22/23 = 84365.22.
+    void monthlyCostReflectsAttendanceOnlyRelaxationIsSettledQuarterly() {
+        // July 2026: 23 working days, 3 absent (20 present). Relaxation is a quarterly
+        // settlement and does NOT appear in the monthly cost.
+        // effectivePaidDays = 20 (no paid-leave allowance, no relaxation added here).
+        // cost = 88200 * 20/23 = 76695.65.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
@@ -463,25 +463,18 @@ class AttendanceQueryServiceTest {
                         1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
                 .thenReturn(rows);
 
-        LeaveRelaxation relaxation = new LeaveRelaxation(resource, "P1", 2026, 3);
-        relaxation.setRelaxationDays(2);
-        when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 3))
-                .thenReturn(Optional.of(relaxation));
-
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
 
         assertThat(cost.workingDays()).isEqualTo(23);
         assertThat(cost.presentDays()).isEqualTo(20.0);
-        assertThat(cost.relaxationDaysApplied()).isEqualTo(2.0);
-        assertThat(cost.cost()).isEqualTo(84365.22);
+        assertThat(cost.cost()).isEqualTo(76695.65);
     }
 
     @Test
-    void relaxationSpillsIntoNextMonthWhenPriorMonthAbsencesAreFewer() {
-        // Quarter Q3 2026, relaxationDays=3. July has only 1 absence -> July absorbs 1, leaving
-        // 2 to spill into August. August has 21 working days, 2 absent (19 present) -> August
-        // absorbs min(2, 2) = 2, fully covering its absences: effective present = 21 = workingDays,
-        // so cost = full monthly rate (88200) even though actual presentDays is only 19.
+    void monthlyCostForAugustReflectsAttendanceOnlyNoRelaxation() {
+        // August 2026: 21 working days, 2 absent (19 present). Relaxation is a quarterly
+        // settlement and is NOT added to the monthly cost here.
+        // effectivePaidDays = 19. cost = 88200 * 19/21 = 79800.0.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
@@ -493,22 +486,6 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-
-        List<Attendance> julyRows = new java.util.ArrayList<>();
-        int julyAbsentMarked = 0;
-        for (LocalDate date = LocalDate.of(2026, 7, 1); !date.isAfter(LocalDate.of(2026, 7, 31));
-                date = date.plusDays(1)) {
-            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
-                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
-                continue;
-            }
-            AttendanceStatus status = julyAbsentMarked < 1 ? AttendanceStatus.A : AttendanceStatus.P;
-            julyAbsentMarked++;
-            julyRows.add(new Attendance(resource, "P1", "M1", null, date, status));
-        }
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                        1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
-                .thenReturn(julyRows);
 
         List<Attendance> augustRows = new java.util.ArrayList<>();
         int augustAbsentMarked = 0;
@@ -526,17 +503,11 @@ class AttendanceQueryServiceTest {
                         1L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
                 .thenReturn(augustRows);
 
-        LeaveRelaxation relaxation = new LeaveRelaxation(resource, "P1", 2026, 3);
-        relaxation.setRelaxationDays(3);
-        when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 3))
-                .thenReturn(Optional.of(relaxation));
-
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 8);
 
         assertThat(cost.workingDays()).isEqualTo(21);
         assertThat(cost.presentDays()).isEqualTo(19.0);
-        assertThat(cost.relaxationDaysApplied()).isEqualTo(2.0);
-        assertThat(cost.cost()).isEqualTo(88200.0);
+        assertThat(cost.cost()).isEqualTo(79800.0);
     }
 
     // ------------------------------------------------------------------
