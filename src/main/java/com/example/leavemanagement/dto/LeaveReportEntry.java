@@ -5,9 +5,9 @@ public record LeaveReportEntry(
         String employeeName,
         String projectId,
         int permissibleLeave,
-        int leaveTaken,
-        int paidLeave,
-        int unpaidLeave,
+        double leaveTaken,
+        double paidLeave,
+        double unpaidLeave,
         int sandwichDays,
-        int totalUnpaidDays,
-        int lapsedLeave) {}
+        double totalUnpaidDays,
+        double lapsedLeave) {}

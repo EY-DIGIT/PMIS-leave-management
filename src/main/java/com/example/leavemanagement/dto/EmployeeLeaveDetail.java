@@ -8,11 +8,12 @@ import java.util.List;
  *     carriedForwardLeave}
  * @param carriedForwardLeave unused permissible leave brought in from the previous quarter (0
  *     unless the project's leave policy allows carry-forward)
+ * @param leaveTaken effective leave consumed: full absent days count 1.0, half-days count 0.5
+ * @param paidLeave leave days covered by the permissible allowance
  * @param unpaidLeave unpaid leave <b>after</b> any recorded {@code relaxationLeave} is subtracted
- * @param relaxationLeave days UIDAI converted from unpaid leave into a separate relaxation
- *     category for this quarter (0 if none recorded) — paid leave is never changed by a
- *     relaxation, see {@link com.example.leavemanagement.entity.LeaveRelaxation}
+ * @param relaxationLeave days converted from unpaid leave into relaxation leave for this quarter
  * @param totalUnpaidDays unpaidLeave + sandwichDays (the payable deduction), after relaxation
+ * @param lapsedLeaveDays permissible days left unused this quarter
  */
 public record EmployeeLeaveDetail(
         String attendanceId,
@@ -26,13 +27,13 @@ public record EmployeeLeaveDetail(
         LocalDate quarterEnd,
         int permissibleLeave,
         int carriedForwardLeave,
-        int leaveTaken,
-        int paidLeave,
-        int unpaidLeave,
-        int relaxationLeave,
+        double leaveTaken,
+        double paidLeave,
+        double unpaidLeave,
+        double relaxationLeave,
         int sandwichDays,
-        int totalUnpaidDays,
-        int lapsedLeave,
+        double totalUnpaidDays,
+        double lapsedLeave,
         List<LocalDate> paidLeaveDates,
         List<LocalDate> unpaidLeaveDates,
         List<LocalDate> sandwichDates) {}

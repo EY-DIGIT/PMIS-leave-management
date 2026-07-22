@@ -5,29 +5,27 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
- * Pure implementation of UIDAI leave policy 5.24.1 for a single resource in a
- * single quarter. No persistence, no I/O — given the quarter window, the
- * resource's joining date, their absent dates and the public-holiday calendar,
- * it returns the paid/unpaid breakdown.
+ * Pure implementation of UIDAI leave policy 5.24.1 for a single resource in a single quarter.
+ * No persistence, no I/O.
  *
- * <p>Rules implemented:
- *
+ * <p>Rules:
  * <ul>
- *   <li>5.24.1.a — up to {@value #MAX_PERMISSIBLE_LEAVE} paid leave days per quarter; the rest are
- *       unpaid. By default unused days lapse (no carry-forward); a project whose leave policy
- *       allows carry-forward can pass the previous quarter's {@code lapsedLeaveDays} in as
- *       {@code carriedForwardDays} to add it to this quarter's allowance instead.
+ *   <li>5.24.1.a — up to {@value #MAX_PERMISSIBLE_LEAVE} paid leave days per quarter; the rest
+ *       are unpaid. Half-day attendance dates (status=HD) each consume <em>0.5</em> of the quota.
+ *       Leave is allocated chronologically — earlier absences are paid first.
  *   <li>5.24.1.a.iii — a mid-quarter joiner's allowance is pro-rated by calendar days.
- *   <li>5.24.1.b — sandwich leave: a weekend/holiday is charged as unpaid when the
- *       absences bracketing it are both unpaid leave (or it trails an open unpaid
- *       stretch at quarter end). It is not charged when either side is a paid leave
- *       or a worked day.
+ *   <li>5.24.1.b — sandwich leave: a weekend/holiday is charged as unpaid when the absences
+ *       bracketing it are both <em>fully-absent</em> unpaid leave days. Half-days do not trigger
+ *       sandwich leave because the employee worked that day.
+ *   <li>Carry-forward — a project may allow unused permissible days from the previous quarter to
+ *       be added to this quarter's allowance (passed as {@code carriedForwardDays}).
  * </ul>
  */
 @Component
@@ -35,100 +33,157 @@ public class QuarterLeavePolicy {
 
     public static final int MAX_PERMISSIBLE_LEAVE = 6;
 
-    /**
-     * @param quarterStart first day of the quarter (inclusive)
-     * @param quarterEnd last day of the quarter (inclusive)
-     * @param joiningDate the resource's joining date, or {@code null} if on/before the quarter start
-     * @param absentDates every date the resource was marked absent (weekends included is fine —
-     *     only absences on working days become leave)
-     * @param holidays public holidays in the quarter
-     */
+    /** One leave event: a date and its effective weight (1.0 for full absent, 0.5 for half-day). */
+    private record WeightedDay(LocalDate date, double weight) {}
+
+    // ------------------------------------------------------------------
+    // Public API — overloads for backward compatibility; all delegate to the full 8-param version
+    // ------------------------------------------------------------------
+
+    /** No half-days, default max allowance, no carry-forward. */
     public QuarterLeaveCalculation compute(
-            LocalDate quarterStart,
-            LocalDate quarterEnd,
+            LocalDate quarterStart, LocalDate quarterEnd,
             LocalDate joiningDate,
             Set<LocalDate> absentDates,
             Set<LocalDate> holidays) {
-        return compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, MAX_PERMISSIBLE_LEAVE, 0);
+        return compute(quarterStart, quarterEnd, joiningDate, absentDates, Set.of(), holidays,
+                MAX_PERMISSIBLE_LEAVE, 0);
     }
 
+    /** No half-days, custom max allowance, no carry-forward. */
     public QuarterLeaveCalculation compute(
-            LocalDate quarterStart,
-            LocalDate quarterEnd,
+            LocalDate quarterStart, LocalDate quarterEnd,
             LocalDate joiningDate,
             Set<LocalDate> absentDates,
             Set<LocalDate> holidays,
             int maxLeavesPerPeriod) {
-        return compute(quarterStart, quarterEnd, joiningDate, absentDates, holidays, maxLeavesPerPeriod, 0);
+        return compute(quarterStart, quarterEnd, joiningDate, absentDates, Set.of(), holidays,
+                maxLeavesPerPeriod, 0);
     }
 
-    /**
-     * @param carriedForwardDays unused permissible leave brought in from the previous quarter —
-     *     added directly to this quarter's base allowance, not prorated. Pass 0 (or use one of the
-     *     other overloads) when the project's leave policy doesn't allow carry-forward.
-     */
+    /** No half-days, custom max allowance and carry-forward. */
     public QuarterLeaveCalculation compute(
-            LocalDate quarterStart,
-            LocalDate quarterEnd,
+            LocalDate quarterStart, LocalDate quarterEnd,
             LocalDate joiningDate,
             Set<LocalDate> absentDates,
             Set<LocalDate> holidays,
             int maxLeavesPerPeriod,
             int carriedForwardDays) {
+        return compute(quarterStart, quarterEnd, joiningDate, absentDates, Set.of(), holidays,
+                maxLeavesPerPeriod, carriedForwardDays);
+    }
+
+    /**
+     * Full computation with half-day support.
+     *
+     * @param absentDates dates the resource was fully absent (each counts as 1.0 leave day)
+     * @param halfDayDates dates the resource worked a half-day (each counts as 0.5 leave days);
+     *     half-days do NOT trigger the sandwich rule
+     * @param carriedForwardDays unused permissible leave from the previous quarter
+     */
+    public QuarterLeaveCalculation compute(
+            LocalDate quarterStart,
+            LocalDate quarterEnd,
+            LocalDate joiningDate,
+            Set<LocalDate> absentDates,
+            Set<LocalDate> halfDayDates,
+            Set<LocalDate> holidays,
+            int maxLeavesPerPeriod,
+            int carriedForwardDays) {
 
         Set<LocalDate> holidaySet = holidays == null ? Set.of() : holidays;
+        Set<LocalDate> halfSet = halfDayDates == null ? Set.of() : halfDayDates;
         LocalDate effectiveStart =
                 (joiningDate != null && joiningDate.isAfter(quarterStart)) ? joiningDate : quarterStart;
 
-        // Joined after the quarter ended -> nothing applies.
         if (effectiveStart.isAfter(quarterEnd)) {
-            return new QuarterLeaveCalculation(0, 0, 0, 0, 0, 0, 0, 0, List.of(), List.of(), List.of());
+            return new QuarterLeaveCalculation(0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+                    List.of(), List.of(), List.of());
         }
 
         int basePermissible =
                 permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, maxLeavesPerPeriod);
         int carriedForward = Math.max(0, carriedForwardDays);
-        int permissible = basePermissible + carriedForward;
+        double permissible = basePermissible + carriedForward;
 
-        List<LocalDate> leaveDates = absentDates.stream()
-                .filter(d -> !d.isBefore(effectiveStart) && !d.isAfter(quarterEnd))
-                .filter(d -> isWorkingDay(d, holidaySet))
-                .sorted()
-                .toList();
+        // Build chronologically sorted list of all leave events with their weights.
+        List<WeightedDay> allDays = new ArrayList<>();
+        if (absentDates != null) {
+            for (LocalDate d : absentDates) {
+                if (!d.isBefore(effectiveStart) && !d.isAfter(quarterEnd) && isWorkingDay(d, holidaySet)) {
+                    allDays.add(new WeightedDay(d, 1.0));
+                }
+            }
+        }
+        for (LocalDate d : halfSet) {
+            if (!d.isBefore(effectiveStart) && !d.isAfter(quarterEnd) && isWorkingDay(d, holidaySet)) {
+                allDays.add(new WeightedDay(d, 0.5));
+            }
+        }
+        allDays.sort(Comparator.comparing(WeightedDay::date));
 
-        int paidCount = Math.min(leaveDates.size(), permissible);
-        List<LocalDate> paidDates = List.copyOf(leaveDates.subList(0, paidCount));
-        List<LocalDate> unpaidDates = List.copyOf(leaveDates.subList(paidCount, leaveDates.size()));
-        Set<LocalDate> unpaidSet = new HashSet<>(unpaidDates);
+        // Allocate permissible quota chronologically.
+        double remaining = permissible;
+        double leaveTaken = 0.0, paidAccum = 0.0, unpaidAccum = 0.0;
+        List<LocalDate> paidDates = new ArrayList<>(), unpaidDates = new ArrayList<>();
+        Set<LocalDate> unpaidFullAbsentSet = new HashSet<>(); // only full-day unpaid (sandwich trigger)
+
+        for (WeightedDay wd : allDays) {
+            leaveTaken += wd.weight();
+            if (remaining >= wd.weight()) {
+                // Fully covered by quota.
+                remaining -= wd.weight();
+                paidAccum += wd.weight();
+                paidDates.add(wd.date());
+            } else if (remaining > 0.0) {
+                // Partially covered — quota runs out mid-day.
+                paidAccum += remaining;
+                unpaidAccum += wd.weight() - remaining;
+                remaining = 0.0;
+                paidDates.add(wd.date());   // partially paid
+                unpaidDates.add(wd.date()); // partially unpaid
+                if (wd.weight() == 1.0) {
+                    unpaidFullAbsentSet.add(wd.date()); // can still trigger sandwich
+                }
+            } else {
+                // Entirely unpaid.
+                unpaidAccum += wd.weight();
+                unpaidDates.add(wd.date());
+                if (wd.weight() == 1.0) {
+                    unpaidFullAbsentSet.add(wd.date()); // full absent day → sandwich eligible
+                }
+                // Half-day dates intentionally NOT added to unpaidFullAbsentSet:
+                // the employee worked that day so sandwich does not apply.
+            }
+        }
 
         List<LocalDate> sandwichDates =
-                sandwichDates(effectiveStart, quarterEnd, holidaySet, unpaidSet);
-
-        int unpaidLeave = unpaidDates.size();
+                sandwichDates(effectiveStart, quarterEnd, holidaySet, unpaidFullAbsentSet);
         int sandwich = sandwichDates.size();
-        int lapsed = Math.max(0, permissible - paidCount);
+        double lapsed = round2(Math.max(0.0, permissible - paidAccum));
 
         return new QuarterLeaveCalculation(
-                permissible,
+                basePermissible + carriedForward,
                 carriedForward,
-                leaveDates.size(),
-                paidCount,
-                unpaidLeave,
+                round2(leaveTaken),
+                round2(paidAccum),
+                round2(unpaidAccum),
                 sandwich,
-                unpaidLeave + sandwich,
+                round2(unpaidAccum + sandwich),
                 lapsed,
-                paidDates,
-                unpaidDates,
+                List.copyOf(paidDates),
+                List.copyOf(unpaidDates),
                 sandwichDates);
     }
 
-    private int permissibleLeave(
-            LocalDate quarterStart, LocalDate quarterEnd, LocalDate effectiveStart, LocalDate joiningDate) {
-        return permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, MAX_PERMISSIBLE_LEAVE);
-    }
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
 
     private int permissibleLeave(
-            LocalDate quarterStart, LocalDate quarterEnd, LocalDate effectiveStart, LocalDate joiningDate, int maxLeaves) {
+            LocalDate quarterStart, LocalDate quarterEnd,
+            LocalDate effectiveStart, LocalDate joiningDate,
+            int maxLeaves) {
         if (joiningDate == null || !joiningDate.isAfter(quarterStart)) {
             return maxLeaves;
         }
@@ -139,21 +194,22 @@ public class QuarterLeavePolicy {
     }
 
     /**
-     * Weekend/holiday days charged as unpaid: those whose bracketing working days
-     * are both unpaid leave, plus a trailing run that follows an unpaid leave with
-     * no return to work before the quarter ends.
+     * Weekend/holiday days charged as unpaid: those whose bracketing working days are both
+     * fully-absent unpaid leave, plus a trailing run that follows an unpaid leave with no return
+     * to work before the quarter ends. Half-day dates do not trigger sandwich.
      */
     private List<LocalDate> sandwichDates(
-            LocalDate effectiveStart, LocalDate quarterEnd, Set<LocalDate> holidays, Set<LocalDate> unpaidSet) {
+            LocalDate effectiveStart, LocalDate quarterEnd,
+            Set<LocalDate> holidays, Set<LocalDate> unpaidFullAbsentSet) {
         List<LocalDate> charged = new ArrayList<>();
         for (LocalDate day = effectiveStart; !day.isAfter(quarterEnd); day = day.plusDays(1)) {
             if (isWorkingDay(day, holidays)) {
-                continue; // sandwich only applies to weekend/holiday days
+                continue;
             }
             LocalDate before = previousWorkingDay(day, effectiveStart, holidays);
             LocalDate after = nextWorkingDay(day, quarterEnd, holidays);
-            boolean beforeUnpaid = before != null && unpaidSet.contains(before);
-            boolean afterUnpaid = after != null && unpaidSet.contains(after);
+            boolean beforeUnpaid = before != null && unpaidFullAbsentSet.contains(before);
+            boolean afterUnpaid = after != null && unpaidFullAbsentSet.contains(after);
             if (beforeUnpaid && (afterUnpaid || after == null)) {
                 charged.add(day);
             }
@@ -163,18 +219,14 @@ public class QuarterLeavePolicy {
 
     private LocalDate previousWorkingDay(LocalDate day, LocalDate lowerBound, Set<LocalDate> holidays) {
         for (LocalDate d = day.minusDays(1); !d.isBefore(lowerBound); d = d.minusDays(1)) {
-            if (isWorkingDay(d, holidays)) {
-                return d;
-            }
+            if (isWorkingDay(d, holidays)) return d;
         }
         return null;
     }
 
     private LocalDate nextWorkingDay(LocalDate day, LocalDate upperBound, Set<LocalDate> holidays) {
         for (LocalDate d = day.plusDays(1); !d.isAfter(upperBound); d = d.plusDays(1)) {
-            if (isWorkingDay(d, holidays)) {
-                return d;
-            }
+            if (isWorkingDay(d, holidays)) return d;
         }
         return null;
     }
@@ -182,5 +234,9 @@ public class QuarterLeavePolicy {
     private boolean isWorkingDay(LocalDate date, Set<LocalDate> holidays) {
         DayOfWeek dow = date.getDayOfWeek();
         return dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY && !holidays.contains(date);
+    }
+
+    private double round2(double v) {
+        return Math.round(v * 100.0) / 100.0;
     }
 }

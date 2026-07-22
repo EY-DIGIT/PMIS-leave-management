@@ -61,19 +61,19 @@ public class LeaveRelaxation {
     private int quarter;
 
     @Column(name = "original_paid_leave", nullable = false)
-    private int originalPaidLeave;
+    private double originalPaidLeave;
 
     @Column(name = "original_unpaid_leave", nullable = false)
-    private int originalUnpaidLeave;
+    private double originalUnpaidLeave;
 
     @Column(name = "relaxation_days", nullable = false)
-    private int relaxationDays;
+    private double relaxationDays;
 
     @Column(name = "final_paid_leave", nullable = false)
-    private int finalPaidLeave;
+    private double finalPaidLeave;
 
     @Column(name = "final_unpaid_leave", nullable = false)
-    private int finalUnpaidLeave;
+    private double finalUnpaidLeave;
 
     @Column(name = "remarks", length = 1000)
     private String remarks;

@@ -356,20 +356,26 @@ public class AttendanceQueryService {
                 attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), start, end).stream()
                         .collect(Collectors.groupingBy(Attendance::getStatus, Collectors.counting()));
 
-        int presentDays = counts.getOrDefault(AttendanceStatus.P, 0L).intValue();
+        int presentDaysRaw = counts.getOrDefault(AttendanceStatus.P, 0L).intValue();
         int halfDays = counts.getOrDefault(AttendanceStatus.HD, 0L).intValue();
         int leaveDays = counts.getOrDefault(AttendanceStatus.L, 0L).intValue();
         int absentDays = counts.getOrDefault(AttendanceStatus.A, 0L).intValue();
         int wfhDays = counts.getOrDefault(AttendanceStatus.WFH, 0L).intValue();
-        double attendancePercentage =
-                workingDays > 0 ? Math.round(presentDays * 10000.0 / workingDays) / 100.0 : 0d;
 
-        // Each half day counts as 0.5 days toward the leave quota (4 half days = 2 leaves).
-        // Full absent days (status=A) count as 1.0 each.
+        // presentDays = fully-present days + worked portion of half-days (0.5 each).
+        // effectiveLeaveTaken = absentDays + halfDays×0.5 → presentDays = workingDays − leaveTaken.
+        double presentDays = presentDaysRaw + halfDays * 0.5;
+
         // leaveLimit is pre-scaled to the period (2/month → 6 for quarterly, 24 for yearly).
         double effectiveAbsent = absentDays + halfDays * 0.5;
         double paidLeaveDays   = Math.min(effectiveAbsent, leaveLimit);
         double unpaidLeaveDays = Math.max(0.0, effectiveAbsent - leaveLimit);
+
+        // Attendance % = (effective present days + paid-leave covered days) / working days.
+        // presentDays already includes the worked half-day portion (HD×0.5).
+        double attendancePercentage = workingDays > 0
+                ? Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0
+                : 0d;
 
         return new AttendanceReportSummary(
                 resource.getResId(),
@@ -519,17 +525,17 @@ public class AttendanceQueryService {
                 : null;
         double rate = monthlyRate != null ? monthlyRate : 0d;
 
-        int relaxationDaysApplied =
+        double relaxationDaysApplied =
                 relaxationDaysAppliedToMonth(resource, projectId, monthStart, attendance.absentDays());
 
         // paidLeaveDays = MIN(absentDays + halfDays/2, monthlyLeaveAllowance) — computed in buildSummary.
-        // effectivePaidDays: P days + half-day worked portion (0.5 each) + leave-covered leave + relaxation.
+        // presentDays already includes the worked half-day portion (HD×0.5), so no separate halfDays*0.5 term.
+        // effectivePaidDays: effective present + leave-covered absence + relaxation.
         double paidLeaveDaysApplied = attendance.paidLeaveDays();
         double effectivePaidDays = Math.min(
                 attendance.workingDays(),
-                attendance.presentDays()
-                        + attendance.halfDays() * 0.5   // worked portion of HD days (always paid)
-                        + paidLeaveDaysApplied          // leave-covered absent + half-day leave portion
+                attendance.presentDays()        // P-days + HD×0.5 (worked portion)
+                        + paidLeaveDaysApplied  // leave-covered absent + half-day leave portion
                         + relaxationDaysApplied);
         // Per-day unit price and derived breakup amounts (0 when there's no rate / no working days).
         double perDayRate = (monthlyRate != null && attendance.workingDays() > 0)
@@ -590,10 +596,10 @@ public class AttendanceQueryService {
      * month. Relaxation is recorded per quarter, not per day, so this is a deterministic way to
      * spread it across months such that monthly costs sum exactly to the quarterly total.
      */
-    private int relaxationDaysAppliedToMonth(
+    private double relaxationDaysAppliedToMonth(
             MasterResource resource, String projectId, LocalDate monthStart, int currentMonthAbsentDays) {
         if (projectId == null) {
-            return 0;
+            return 0.0;
         }
         int year = monthStart.getYear();
         int month = monthStart.getMonthValue();
@@ -603,10 +609,10 @@ public class AttendanceQueryService {
                 .findByResource_ResIdAndProjectIdAndYearAndQuarter(resource.getResId(), projectId, year, quarter)
                 .orElse(null);
         if (relaxation == null || relaxation.getRelaxationDays() <= 0) {
-            return 0;
+            return 0.0;
         }
 
-        int remaining = relaxation.getRelaxationDays();
+        double remaining = relaxation.getRelaxationDays();
         int firstMonthOfQuarter = quarter * 3 - 2;
         int lastMonthOfQuarter = quarter * 3;
         for (int m = firstMonthOfQuarter; m <= lastMonthOfQuarter; m++) {
@@ -618,13 +624,13 @@ public class AttendanceQueryService {
                 LocalDate me = ms.withDayOfMonth(ms.lengthOfMonth());
                 absentThisMonth = countAbsentDays(resource.getId(), ms, me);
             }
-            int applied = Math.min(remaining, absentThisMonth);
+            double applied = Math.min(remaining, absentThisMonth);
             if (m == month) {
                 return applied;
             }
             remaining -= applied;
         }
-        return 0;
+        return 0.0;
     }
 
     private int countAbsentDays(Long resourceId, LocalDate start, LocalDate end) {
@@ -682,13 +688,19 @@ public class AttendanceQueryService {
                     .map(Attendance::getAttendanceDate)
                     .collect(Collectors.toSet());
 
+            Set<LocalDate> halfDayDates = resourceRows.stream()
+                    .filter(a -> a.getStatus() == AttendanceStatus.HD)
+                    .map(Attendance::getAttendanceDate)
+                    .collect(Collectors.toSet());
+
             LocalDate joiningDate = projectResourceRepository
                     .findByResourceIdAndActiveTrue(resource.getId())
                     .map(ProjectResource::getAssignmentStartDate)
                     .orElse(resource.getDateOfJoining());
 
             QuarterLeaveCalculation calculation = quarterLeaveResolver.calculate(
-                    resource.getId(), resourceProjectId, joiningDate, year, quarter, absentDates);
+                    resource.getId(), resourceProjectId, joiningDate, year, quarter,
+                    absentDates, halfDayDates);
 
             settlements.add(
                     new ResourceQuarterSettlement(resource.getResId(), resource.getName(), joiningDate, calculation));

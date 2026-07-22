@@ -31,11 +31,11 @@ class QuarterLeavePolicyTest {
         QuarterLeaveCalculation calc = policy.compute(Q_START, Q_END, null, absent, Set.of());
 
         assertThat(calc.permissibleLeave()).isEqualTo(6);
-        assertThat(calc.leaveDaysTaken()).isEqualTo(7);
-        assertThat(calc.paidLeaveDays()).isEqualTo(6);
-        assertThat(calc.unpaidLeaveDays()).isEqualTo(1);
+        assertThat(calc.leaveDaysTaken()).isEqualTo(7.0);
+        assertThat(calc.paidLeaveDays()).isEqualTo(6.0);
+        assertThat(calc.unpaidLeaveDays()).isEqualTo(1.0);
         assertThat(calc.sandwichDays()).isZero(); // Sat/Sun 15-16 prefixed by a PAID leave -> not charged
-        assertThat(calc.totalUnpaidDays()).isEqualTo(1);
+        assertThat(calc.totalUnpaidDays()).isEqualTo(1.0);
         assertThat(calc.unpaidLeaveDates()).containsExactly(LocalDate.of(2024, 6, 17));
     }
 
@@ -61,17 +61,15 @@ class QuarterLeavePolicyTest {
         QuarterLeaveCalculation calc = policy.compute(Q_START, Q_END, null, absent, Set.of());
 
         assertThat(calc.permissibleLeave()).isEqualTo(6);
-        assertThat(calc.paidLeaveDays()).isEqualTo(6);
-        assertThat(calc.unpaidLeaveDays()).isEqualTo(13); // Jun 12,13,14,17..21,24..28
+        assertThat(calc.paidLeaveDays()).isEqualTo(6.0);
+        assertThat(calc.unpaidLeaveDays()).isEqualTo(13.0); // Jun 12,13,14,17..21,24..28
         assertThat(calc.sandwichDays()).isEqualTo(6); // weekends 15-16, 22-23, 29-30
-        assertThat(calc.totalUnpaidDays()).isEqualTo(19);
+        assertThat(calc.totalUnpaidDays()).isEqualTo(19.0);
         assertThat(calc.lapsedLeaveDays()).isZero();
     }
 
     @Test
     void sandwichChargedWhenWeekendBracketedByTwoUnpaidLeaves() {
-        // No permissible leave (joined so late it pro-rates to ~0) so both Fri & Mon are unpaid.
-        // Simpler: use a full quarter but make the first 6 leaves earlier, then Fri 21 + Mon 24 unpaid.
         Set<LocalDate> absent = new HashSet<>(Set.of(
                 LocalDate.of(2024, 4, 1),
                 LocalDate.of(2024, 4, 2),
@@ -84,9 +82,9 @@ class QuarterLeavePolicyTest {
 
         QuarterLeaveCalculation calc = policy.compute(Q_START, Q_END, null, absent, Set.of());
 
-        assertThat(calc.unpaidLeaveDays()).isEqualTo(2);
+        assertThat(calc.unpaidLeaveDays()).isEqualTo(2.0);
         assertThat(calc.sandwichDays()).isEqualTo(2); // Sat 22 + Sun 23 bracketed by unpaid leaves
-        assertThat(calc.totalUnpaidDays()).isEqualTo(4);
+        assertThat(calc.totalUnpaidDays()).isEqualTo(4.0);
     }
 
     @Test
@@ -118,9 +116,9 @@ class QuarterLeavePolicyTest {
 
         assertThat(calc.carriedForwardLeave()).isEqualTo(2);
         assertThat(calc.permissibleLeave()).isEqualTo(8); // 6 base + 2 carried in
-        assertThat(calc.paidLeaveDays()).isEqualTo(4);
+        assertThat(calc.paidLeaveDays()).isEqualTo(4.0);
         assertThat(calc.unpaidLeaveDays()).isZero();
-        assertThat(calc.lapsedLeaveDays()).isEqualTo(4);
+        assertThat(calc.lapsedLeaveDays()).isEqualTo(4.0);
     }
 
     @Test
@@ -141,5 +139,49 @@ class QuarterLeavePolicyTest {
                 policy.compute(Q_START, Q_END, null, Set.of(), Set.of(), 4);
         assertThat(calcWithMax.carriedForwardLeave()).isZero();
         assertThat(calcWithMax.permissibleLeave()).isEqualTo(4);
+    }
+
+    @Test
+    void halfDayCountsAsHalfLeaveDay() {
+        // 2 full absent + 2 half-days = 2 + 1.0 = 3.0 effective leave days. All within quota (6).
+        Set<LocalDate> absent = Set.of(
+                LocalDate.of(2024, 4, 1),
+                LocalDate.of(2024, 4, 2));
+        Set<LocalDate> halfDays = Set.of(
+                LocalDate.of(2024, 4, 3),
+                LocalDate.of(2024, 4, 4));
+
+        QuarterLeaveCalculation calc = policy.compute(
+                Q_START, Q_END, null, absent, halfDays, Set.of(),
+                QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE, 0);
+
+        assertThat(calc.leaveDaysTaken()).isEqualTo(3.0);
+        assertThat(calc.paidLeaveDays()).isEqualTo(3.0);
+        assertThat(calc.unpaidLeaveDays()).isZero();
+        assertThat(calc.lapsedLeaveDays()).isEqualTo(3.0); // 6 - 3 = 3 lapsed
+        assertThat(calc.paidLeaveDates()).containsExactlyInAnyOrder(
+                LocalDate.of(2024, 4, 1), LocalDate.of(2024, 4, 2),
+                LocalDate.of(2024, 4, 3), LocalDate.of(2024, 4, 4));
+    }
+
+    @Test
+    void halfDayDoesNotTriggerSandwichLeave() {
+        // Half-day on Fri, full absent on Mon — the weekend in between should NOT be sandwiched
+        // because the employee worked Friday (half-day).
+        Set<LocalDate> absent = Set.of(
+                LocalDate.of(2024, 4, 1), LocalDate.of(2024, 4, 2),
+                LocalDate.of(2024, 4, 3), LocalDate.of(2024, 4, 4),
+                LocalDate.of(2024, 4, 5), LocalDate.of(2024, 4, 8), // 6 paid — quota exhausted
+                LocalDate.of(2024, 6, 24)); // Mon unpaid (full absent)
+        Set<LocalDate> halfDays = Set.of(LocalDate.of(2024, 6, 21)); // Fri half-day (unpaid, beyond quota)
+
+        QuarterLeaveCalculation calc = policy.compute(
+                Q_START, Q_END, null, absent, halfDays, Set.of(),
+                QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE, 0);
+
+        // Half-day (Fri) + full absent (Mon) together surround the weekend, but sandwich should
+        // NOT fire because Fri is a half-day (employee worked), not a full absent.
+        assertThat(calc.sandwichDays()).isZero();
+        assertThat(calc.unpaidLeaveDays()).isEqualTo(1.5); // 0.5 (half-day) + 1.0 (full Mon)
     }
 }

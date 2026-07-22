@@ -14,5 +14,5 @@ public record QuarterlyRelaxationRequest(
         @NotBlank(message = "projectId is required") String projectId,
         int year,
         int quarter,
-        int relaxationDays,
+        double relaxationDays,
         String remarks) {}

@@ -131,16 +131,16 @@ public class LeaveReportService {
                 .orElseGet(() -> new LeaveRelaxation(resource, request.projectId(), request.year(), request.quarter()));
 
         // Cumulative relaxation already approved in prior calls (0 for a brand-new record).
-        int prevRelaxationDays = relaxation.getRelaxationDays();
+        double prevRelaxationDays = relaxation.getRelaxationDays();
 
-        // Remaining unpaid leave not yet converted to relaxation.
-        int remainingUnpaid = Math.max(0, raw.unpaidLeave() - prevRelaxationDays);
+        // Remaining unpaid leave not yet converted to relaxation (may be fractional due to half-days).
+        double remainingUnpaid = Math.max(0.0, raw.unpaidLeave() - prevRelaxationDays);
 
         // Clamp the increment — never approve more than what's still available.
-        int approved = Math.min(request.relaxationDays(), remainingUnpaid);
+        double approved = Math.min(request.relaxationDays(), remainingUnpaid);
 
-        int newTotalRelaxation = prevRelaxationDays + approved;
-        int newFinalUnpaid     = raw.unpaidLeave() - newTotalRelaxation;
+        double newTotalRelaxation = prevRelaxationDays + approved;
+        double newFinalUnpaid     = raw.unpaidLeave() - newTotalRelaxation;
 
         relaxation.setOriginalPaidLeave(raw.paidLeave());
         relaxation.setOriginalUnpaidLeave(raw.unpaidLeave());
@@ -173,7 +173,7 @@ public class LeaveReportService {
     private EmployeeLeaveDetail applyRelaxation(EmployeeLeaveDetail raw, LeaveRelaxation relaxation) {
         // Cap relaxationDays to the base unpaid leave in case attendance was re-uploaded after the
         // relaxation record was first saved (prevents negative unpaidLeave in the response).
-        int relaxDays = Math.min(relaxation.getRelaxationDays(), raw.unpaidLeave());
+        double relaxDays = Math.min(relaxation.getRelaxationDays(), raw.unpaidLeave());
         return new EmployeeLeaveDetail(
                 raw.attendanceId(),
                 raw.employeeName(),
@@ -191,7 +191,7 @@ public class LeaveReportService {
                 raw.unpaidLeave() - relaxDays,
                 relaxDays,
                 raw.sandwichDays(),
-                Math.max(0, raw.totalUnpaidDays() - relaxDays),
+                Math.max(0.0, raw.totalUnpaidDays() - relaxDays),
                 raw.lapsedLeave(),
                 raw.paidLeaveDates(),
                 raw.unpaidLeaveDates(),
@@ -217,12 +217,18 @@ public class LeaveReportService {
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
 
         Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
-        Set<LocalDate> absentDates = resource
+        List<Attendance> attendanceRows = resource
                 .map(r -> attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         r.getId(), quarterStart, quarterEnd))
-                .orElse(List.of())
-                .stream()
+                .orElse(List.of());
+
+        Set<LocalDate> absentDates = attendanceRows.stream()
                 .filter(a -> a.getStatus() == AttendanceStatus.A)
+                .map(Attendance::getAttendanceDate)
+                .collect(Collectors.toSet());
+
+        Set<LocalDate> halfDayDates = attendanceRows.stream()
+                .filter(a -> a.getStatus() == AttendanceStatus.HD)
                 .map(Attendance::getAttendanceDate)
                 .collect(Collectors.toSet());
 
@@ -244,7 +250,8 @@ public class LeaveReportService {
 
         Long resourceId = resource.map(MasterResource::getId).orElse(null);
         QuarterLeaveCalculation calc =
-                quarterLeaveResolver.calculate(resourceId, projectId, joiningDate, year, quarter, absentDates);
+                quarterLeaveResolver.calculate(resourceId, projectId, joiningDate, year, quarter,
+                        absentDates, halfDayDates);
 
         return new EmployeeLeaveDetail(
                 attendanceId,
@@ -261,7 +268,7 @@ public class LeaveReportService {
                 calc.leaveDaysTaken(),
                 calc.paidLeaveDays(),
                 calc.unpaidLeaveDays(),
-                0, // relaxationLeave: none applied yet — see applyRelaxation
+                0.0, // relaxationLeave: none applied yet — see applyRelaxation
                 calc.sandwichDays(),
                 calc.totalUnpaidDays(),
                 calc.lapsedLeaveDays(),

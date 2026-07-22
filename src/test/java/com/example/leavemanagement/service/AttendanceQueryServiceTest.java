@@ -277,7 +277,7 @@ class AttendanceQueryServiceTest {
         assertThat(summary.projectId()).isEqualTo("P1");
         assertThat(summary.holidayDays()).isEqualTo(1);
         assertThat(summary.absentDays()).isEqualTo(1);
-        assertThat(summary.presentDays()).isEqualTo(rows.size() - 1);
+        assertThat(summary.presentDays()).isEqualTo((double) (rows.size() - 1));
     }
 
     @Test
@@ -368,7 +368,7 @@ class AttendanceQueryServiceTest {
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
 
         assertThat(cost.workingDays()).isEqualTo(23);
-        assertThat(cost.presentDays()).isEqualTo(22);
+        assertThat(cost.presentDays()).isEqualTo(22.0);
         assertThat(cost.rateYear()).isEqualTo("Year-3");
         assertThat(cost.monthlyRate()).isEqualTo(88200.0);
         assertThat(cost.cost()).isEqualTo(84365.22);
@@ -468,8 +468,8 @@ class AttendanceQueryServiceTest {
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
 
         assertThat(cost.workingDays()).isEqualTo(23);
-        assertThat(cost.presentDays()).isEqualTo(20);
-        assertThat(cost.relaxationDaysApplied()).isEqualTo(2);
+        assertThat(cost.presentDays()).isEqualTo(20.0);
+        assertThat(cost.relaxationDaysApplied()).isEqualTo(2.0);
         assertThat(cost.cost()).isEqualTo(84365.22);
     }
 
@@ -531,8 +531,8 @@ class AttendanceQueryServiceTest {
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 8);
 
         assertThat(cost.workingDays()).isEqualTo(21);
-        assertThat(cost.presentDays()).isEqualTo(19);
-        assertThat(cost.relaxationDaysApplied()).isEqualTo(2);
+        assertThat(cost.presentDays()).isEqualTo(19.0);
+        assertThat(cost.relaxationDaysApplied()).isEqualTo(2.0);
         assertThat(cost.cost()).isEqualTo(88200.0);
     }
 
@@ -570,9 +570,9 @@ class AttendanceQueryServiceTest {
         var settlement = report.resources().get(0);
         assertThat(settlement.employeeName()).isEqualTo("Resource A");
         assertThat(settlement.calculation().permissibleLeave()).isEqualTo(6);
-        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(6);
-        assertThat(settlement.calculation().unpaidLeaveDays()).isEqualTo(1);
-        assertThat(settlement.calculation().totalUnpaidDays()).isEqualTo(1);
+        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(6.0);
+        assertThat(settlement.calculation().unpaidLeaveDays()).isEqualTo(1.0);
+        assertThat(settlement.calculation().totalUnpaidDays()).isEqualTo(1.0);
     }
 
     @Test
@@ -607,7 +607,7 @@ class AttendanceQueryServiceTest {
         var settlement = report.resources().get(0);
         assertThat(settlement.calculation().carriedForwardLeave()).isEqualTo(4);
         assertThat(settlement.calculation().permissibleLeave()).isEqualTo(10); // 6 base + 4 carried in
-        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(4);
+        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(4.0);
         assertThat(settlement.calculation().unpaidLeaveDays()).isZero();
     }
 
