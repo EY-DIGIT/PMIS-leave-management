@@ -10,5 +10,7 @@ import java.time.LocalDate;
 public record ResourceQuarterSettlement(
         String attendanceId,
         String employeeName,
+        String milestoneId,
+        String activityId,
         LocalDate joiningDate,
         QuarterLeaveCalculation calculation) {}

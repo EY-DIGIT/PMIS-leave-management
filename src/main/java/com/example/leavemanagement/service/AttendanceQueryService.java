@@ -382,8 +382,19 @@ public class AttendanceQueryService {
         }
         int workingDays = totalDays - weekOffDays - holidayDays;
 
-        Map<AttendanceStatus, Long> counts =
-                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), start, end).stream()
+        List<Attendance> rows =
+                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), start, end);
+
+        // milestoneId / activityId come from the most-recent row's upload metadata.
+        // All rows in a single upload share the same values; take the last non-null found.
+        String milestoneId = null;
+        String activityId  = null;
+        for (Attendance row : rows) {
+            if (row.getMilestoneId() != null) milestoneId = row.getMilestoneId();
+            if (row.getActivityId()  != null) activityId  = row.getActivityId();
+        }
+
+        Map<AttendanceStatus, Long> counts = rows.stream()
                         .collect(Collectors.groupingBy(Attendance::getStatus, Collectors.counting()));
 
         int presentDaysRaw = counts.getOrDefault(AttendanceStatus.P, 0L).intValue();
@@ -411,6 +422,8 @@ public class AttendanceQueryService {
                 resource.getResId(),
                 resource.getName(),
                 projectId,
+                milestoneId,
+                activityId,
                 periodLabel,
                 workingDays,
                 presentDays,
@@ -626,6 +639,8 @@ public class AttendanceQueryService {
                 resource.getResId(),
                 resource.getName(),
                 projectId,
+                attendance.milestoneId(),
+                attendance.activityId(),
                 rateYear,
                 periodLabel,
                 attendance.workingDays(),
@@ -725,8 +740,15 @@ public class AttendanceQueryService {
                     resource.getId(), resourceProjectId, joiningDate, year, quarter,
                     absentDates, halfDayDates);
 
-            settlements.add(
-                    new ResourceQuarterSettlement(resource.getResId(), resource.getName(), joiningDate, calculation));
+            String milestoneId = null;
+            String activityId  = null;
+            for (Attendance row : resourceRows) {
+                if (row.getMilestoneId() != null) milestoneId = row.getMilestoneId();
+                if (row.getActivityId()  != null) activityId  = row.getActivityId();
+            }
+
+            settlements.add(new ResourceQuarterSettlement(
+                    resource.getResId(), resource.getName(), milestoneId, activityId, joiningDate, calculation));
         }
         settlements.sort(Comparator.comparing(ResourceQuarterSettlement::attendanceId));
 

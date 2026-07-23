@@ -9,6 +9,8 @@ package com.example.leavemanagement.dto;
  * @param employeeName resource's name
  * @param projectId the project this summary is scoped to (may be null if the resource has no
  *     assignment)
+ * @param milestoneId milestone from the most-recent uploaded row in this period (null if no data)
+ * @param activityId activity from the most-recent uploaded row in this period (null if no data)
  * @param period human-readable period label, e.g. "July 2026", "Q3 2026", "2026"
  * @param presentDays effective days worked: P-status days + halfDays×0.5 (worked portion of
  *     half-days). Formula: workingDays − (absentDays + halfDays×0.5).
@@ -22,6 +24,8 @@ public record AttendanceReportSummary(
         String attendanceId,
         String employeeName,
         String projectId,
+        String milestoneId,
+        String activityId,
         String period,
         int workingDays,
         double presentDays,

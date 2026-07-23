@@ -25,6 +25,8 @@ public record EmployeeLeaveDetail(
         String employeeName,
         String projectId,
         String projectName,
+        String milestoneId,
+        String activityId,
         LocalDate joiningDate,
         int year,
         int quarter,

@@ -205,6 +205,8 @@ public class LeaveReportService {
                 raw.employeeName(),
                 raw.projectId(),
                 raw.projectName(),
+                raw.milestoneId(),
+                raw.activityId(),
                 raw.joiningDate(),
                 raw.year(),
                 raw.quarter(),
@@ -259,6 +261,13 @@ public class LeaveReportService {
                 .map(Attendance::getAttendanceDate)
                 .collect(Collectors.toSet());
 
+        String milestoneId = null;
+        String activityId  = null;
+        for (Attendance row : attendanceRows) {
+            if (row.getMilestoneId() != null) milestoneId = row.getMilestoneId();
+            if (row.getActivityId()  != null) activityId  = row.getActivityId();
+        }
+
         ProjectResource assignment = resource
                 .flatMap(r -> projectResourceRepository.findByResourceIdAndActiveTrue(r.getId()))
                 .orElse(null);
@@ -286,6 +295,8 @@ public class LeaveReportService {
                 employeeName,
                 projectId,
                 projectName,
+                milestoneId,
+                activityId,
                 joiningDate,
                 year,
                 quarter,

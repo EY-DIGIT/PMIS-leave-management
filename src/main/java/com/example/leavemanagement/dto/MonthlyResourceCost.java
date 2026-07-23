@@ -28,6 +28,8 @@ public record MonthlyResourceCost(
         String attendanceId,
         String employeeName,
         String projectId,
+        String milestoneId,
+        String activityId,
         String rateYear,
         String period,
         int workingDays,
