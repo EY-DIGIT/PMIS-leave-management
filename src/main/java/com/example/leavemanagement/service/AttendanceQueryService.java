@@ -120,10 +120,14 @@ public class AttendanceQueryService {
         int[] thresholds = resolveThresholds(projectId, leavePolicies.get(projectId));
         Set<LocalDate> holidays = holidaysBetween(startDate, endDate);
 
+        // Bulk-delete all existing rows for this project+period before inserting the new file's data.
+        // A @Modifying JPQL query is used (not a derived delete) so the single DELETE SQL is flushed
+        // to the DB immediately — preventing uk_attendance_resource_date violations on re-upload.
+        attendanceRepository.bulkDeleteByProjectIdAndDateBetween(projectId, startDate, endDate);
+
         int stored = 0;
         for (EmployeeAttendanceByDate employee : parsed) {
             MasterResource resource = masterResourceRepository.findByResId(employee.attendanceId()).orElseThrow();
-            attendanceRepository.deleteByResourceIdAndAttendanceDateBetween(resource.getId(), startDate, endDate);
             for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
                 if (isWeekend(date) || holidays.contains(date)) {
                     continue; // derived at report time, not persisted
@@ -149,13 +153,23 @@ public class AttendanceQueryService {
         return parsed.stream().map(EmployeeAttendanceByDate::attendanceId).toList();
     }
 
-    /** Validates Attendance Start Date <= Attendance End Date. */
+    /** Validates Attendance Start Date <= Attendance End Date and the period is not a future month. */
     private void validatePeriod(LocalDate startDate, LocalDate endDate) {
         if (startDate == null || endDate == null) {
             throw new BadRequestException("Attendance Start Date and Attendance End Date are required.");
         }
         if (startDate.isAfter(endDate)) {
             throw new BadRequestException("Attendance Start Date cannot be greater than Attendance End Date.");
+        }
+        LocalDate today = LocalDate.now();
+        if (startDate.getYear() > today.getYear()
+                || (startDate.getYear() == today.getYear()
+                        && startDate.getMonthValue() > today.getMonthValue())) {
+            throw new BadRequestException(
+                    "Cannot upload attendance for a future month. Current month is "
+                            + today.getMonth().getDisplayName(
+                                    java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH)
+                            + " " + today.getYear() + ".");
         }
     }
 
