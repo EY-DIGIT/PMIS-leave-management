@@ -30,4 +30,12 @@ public interface ProjectResourceRepository extends JpaRepository<ProjectResource
             + "AND pr.assignmentStartDate <= :date AND (pr.assignmentEndDate IS NULL OR pr.assignmentEndDate >= :date)")
     Optional<ProjectResource> findEffectiveOn(
             @Param("resId") String resId, @Param("projectId") String projectId, @Param("date") LocalDate date);
+
+    /**
+     * All active assignments whose resource's last working date has been reached (lastDate <= today).
+     * Used by the nightly deactivation scheduler to close assignments for scheduled exits.
+     */
+    @Query("SELECT pr FROM ProjectResource pr WHERE pr.active = true "
+            + "AND pr.resource.lastDate IS NOT NULL AND pr.resource.lastDate <= :today")
+    List<ProjectResource> findActiveAssignmentsDueForDeactivation(@Param("today") LocalDate today);
 }

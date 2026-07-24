@@ -14,6 +14,7 @@ public record AttendanceReportTotals(
         int leaveDays,
         int absentDays,
         int wfhDays,
+        double leaveTaken,
         double paidLeaveDays,
         double unpaidLeaveDays,
         double avgAttendancePercentage) {}

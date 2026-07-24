@@ -331,8 +331,7 @@ public class AttendanceQueryService {
             String projectId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
         List<AttendanceReportSummary> rows = projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
-                .map(ProjectResource::getResource)
-                .map(resource -> buildSummary(resource, projectId, start, end, periodLabel, leaveLimit))
+                .map(pr -> buildSummary(pr.getResource(), projectId, start, end, periodLabel, leaveLimit, pr.getRole()))
                 .toList();
         return new AttendanceReportResult(periodLabel, rows.size(), buildAttendanceTotals(rows), rows);
     }
@@ -342,32 +341,34 @@ public class AttendanceQueryService {
         MasterResource resource = masterResourceRepository
                 .findByResId(resourceId)
                 .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
-        String projectId = projectResourceRepository
+        ProjectResource assignment = projectResourceRepository
                 .findByResourceIdAndActiveTrue(resource.getId())
-                .map(ProjectResource::getProjectId)
                 .orElse(null);
+        String projectId   = assignment != null ? assignment.getProjectId() : null;
+        String designation = assignment != null ? assignment.getRole() : null;
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
-        return buildSummary(resource, projectId, start, end, periodLabel, leaveLimit);
+        return buildSummary(resource, projectId, start, end, periodLabel, leaveLimit, designation);
     }
 
     private AttendanceReportTotals buildAttendanceTotals(List<AttendanceReportSummary> rows) {
         if (rows.isEmpty()) {
-            return new AttendanceReportTotals(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return new AttendanceReportTotals(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
-        int workingDays   = rows.get(0).workingDays(); // same for all on the same project/calendar
-        double presentSum = rows.stream().mapToDouble(AttendanceReportSummary::presentDays).sum();
-        int halfSum       = rows.stream().mapToInt(AttendanceReportSummary::halfDays).sum();
-        int leaveSum      = rows.stream().mapToInt(AttendanceReportSummary::leaveDays).sum();
-        int absentSum     = rows.stream().mapToInt(AttendanceReportSummary::absentDays).sum();
-        int wfhSum        = rows.stream().mapToInt(AttendanceReportSummary::wfhDays).sum();
-        double paidSum    = rows.stream().mapToDouble(AttendanceReportSummary::paidLeaveDays).sum();
-        double unpaidSum  = rows.stream().mapToDouble(AttendanceReportSummary::unpaidLeaveDays).sum();
-        double avgAtt     = Math.round(
+        int workingDays        = rows.get(0).workingDays(); // same for all on the same project/calendar
+        double presentSum      = rows.stream().mapToDouble(AttendanceReportSummary::presentDays).sum();
+        int halfSum            = rows.stream().mapToInt(AttendanceReportSummary::halfDays).sum();
+        int leaveSum           = rows.stream().mapToInt(AttendanceReportSummary::leaveDays).sum();
+        int absentSum          = rows.stream().mapToInt(AttendanceReportSummary::absentDays).sum();
+        int wfhSum             = rows.stream().mapToInt(AttendanceReportSummary::wfhDays).sum();
+        double leaveTakenSum   = rows.stream().mapToDouble(AttendanceReportSummary::leaveTaken).sum();
+        double paidSum         = rows.stream().mapToDouble(AttendanceReportSummary::paidLeaveDays).sum();
+        double unpaidSum       = rows.stream().mapToDouble(AttendanceReportSummary::unpaidLeaveDays).sum();
+        double avgAtt          = Math.round(
                 rows.stream().mapToDouble(AttendanceReportSummary::attendancePercentage).average().orElse(0) * 100)
                 / 100.0;
         return new AttendanceReportTotals(
                 rows.size(), workingDays, presentSum, halfSum, leaveSum, absentSum, wfhSum,
-                paidSum, unpaidSum, avgAtt);
+                leaveTakenSum, paidSum, unpaidSum, avgAtt);
     }
 
     /**
@@ -382,7 +383,7 @@ public class AttendanceQueryService {
 
     private AttendanceReportSummary buildSummary(
             MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel,
-            int leaveLimit) {
+            int leaveLimit, String designation) {
         int totalDays = (int) (end.toEpochDay() - start.toEpochDay()) + 1;
         Set<LocalDate> holidays = holidaysBetween(start, end);
         int weekOffDays = 0;
@@ -435,6 +436,7 @@ public class AttendanceQueryService {
         return new AttendanceReportSummary(
                 resource.getResId(),
                 resource.getName(),
+                designation,
                 projectId,
                 milestoneId,
                 activityId,
@@ -448,6 +450,7 @@ public class AttendanceQueryService {
                 holidayDays,
                 wfhDays,
                 attendancePercentage,
+                effectiveAbsent,
                 paidLeaveDays,
                 unpaidLeaveDays);
     }
@@ -617,14 +620,14 @@ public class AttendanceQueryService {
             Optional<LeavePolicyResponse> leavePolicy = leavePolicyClient.getLeavePolicy(projectId);
             monthlyLeaveAllowance = resolveMonthlyLeaveAllowance(projectId, leavePolicy);
         }
-        AttendanceReportSummary attendance =
-                buildSummary(resource, projectId, monthStart, monthEnd, periodLabel, monthlyLeaveAllowance);
-
         ProjectResource assignment = projectId == null
                 ? null
                 : projectResourceRepository
                         .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), projectId)
                         .orElse(null);
+        AttendanceReportSummary attendance = buildSummary(
+                resource, projectId, monthStart, monthEnd, periodLabel, monthlyLeaveAllowance,
+                assignment != null ? assignment.getRole() : null);
         String rateYear = assignment != null ? assignment.getRateYear() : null;
         Double monthlyRate = (assignment != null && rateYear != null)
                 ? assignment.getRateCardByYear().get(rateYear)

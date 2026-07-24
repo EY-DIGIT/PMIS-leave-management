@@ -256,39 +256,56 @@ public class MasterResourceService {
     }
 
     /**
-     * Updates the resource's employee fields, plus its current active assignment's role/rate card
-     * in place (if it has one). Does not create, close, or move assignments.
+     * Updates the resource's employee fields and active assignment in place, and applies the
+     * following active/lastDate business rules when {@code active=false}:
+     *
+     * <ul>
+     *   <li>{@code lastDate = null} — defaults to today; resource becomes inactive immediately.
+     *   <li>{@code lastDate <= today} — resource becomes inactive immediately.
+     *   <li>{@code lastDate > today} — future exit date saved; resource stays active until that
+     *       date, after which the nightly {@code ResourceDeactivationScheduler} closes the
+     *       assignment automatically.
+     * </ul>
+     *
+     * When {@code active=true} or unset the resource remains active; {@code lastDate} may still be
+     * stored (e.g. a known future exit that has not yet been confirmed).
      */
     @Transactional
     public ResourceResponse updateResource(String resId, ResourceUpdateRequest request) {
         MasterResource resource = repository
                 .findByResId(resId)
                 .orElseThrow(() -> new NotFoundException("No resource with res_id " + resId));
+
         resource.setName(request.name());
         resource.setEmailId(request.emailId());
         resource.setLocation(request.location());
         resource.setCategory(request.category());
         resource.setCategoryDetails(request.categoryDetails());
         resource.setDateOfJoining(request.dateOfJoining());
-        resource.setLastDate(request.lastDate());
-        repository.save(resource);
 
         ProjectResource assignment =
                 projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()).orElse(null);
+
+        if (Boolean.FALSE.equals(request.active())) {
+            // Null lastDate → default to today (immediate exit).
+            LocalDate exitDate = request.lastDate() != null ? request.lastDate() : LocalDate.now();
+            resource.setLastDate(exitDate);
+
+            if (assignment != null && !exitDate.isAfter(LocalDate.now())) {
+                // lastDate is today or in the past — deactivate immediately.
+                assignment.setActive(false);
+                assignment.setAssignmentEndDate(exitDate);
+            }
+            // lastDate > today: keep assignment active — nightly scheduler will close it.
+        } else {
+            resource.setLastDate(request.lastDate());
+        }
+
+        repository.save(resource);
+
         if (assignment != null) {
             assignment.setRole(request.designationType());
             assignment.setRateCardByYear(request.rateCardByYear());
-
-            // active=false deactivates the current assignment; lastDate is mandatory and becomes
-            // the inactivation (assignment end) date. active=true/null keeps it active.
-            if (Boolean.FALSE.equals(request.active())) {
-                if (request.lastDate() == null) {
-                    throw new BadRequestException(
-                            "lastDate is required to deactivate a resource — it is the inactivation date.");
-                }
-                assignment.setActive(false);
-                assignment.setAssignmentEndDate(request.lastDate());
-            }
             projectResourceRepository.save(assignment);
         }
         return buildResponse(resource, assignment);
