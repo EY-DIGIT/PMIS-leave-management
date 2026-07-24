@@ -57,6 +57,9 @@ class LeaveReportServiceTest {
     @Mock
     private LeavePolicyClient leavePolicyClient;
 
+    @Mock
+    private AttendancePeriodValidator periodValidator;
+
     // Real engine, same as AttendanceQueryServiceTest.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -68,7 +71,7 @@ class LeaveReportServiceTest {
                 attendanceRepository, publicHolidayRepository, leavePolicyClient, policy);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
-                attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver);
+                attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver, periodValidator);
     }
 
     private void setId(MasterResource resource, long id) {

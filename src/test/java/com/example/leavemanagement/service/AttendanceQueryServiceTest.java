@@ -69,6 +69,9 @@ class AttendanceQueryServiceTest {
     @Mock
     private LeaveRelaxationRepository leaveRelaxationRepository;
 
+    @Mock
+    private AttendancePeriodValidator periodValidator;
+
     // Real engine — the quarterly-settlement path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -81,7 +84,7 @@ class AttendanceQueryServiceTest {
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
-                quarterLeaveResolver);
+                quarterLeaveResolver, periodValidator);
     }
 
     private MultipartFile anyFile() {

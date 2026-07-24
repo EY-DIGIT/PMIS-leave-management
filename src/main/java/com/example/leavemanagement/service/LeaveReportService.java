@@ -39,6 +39,7 @@ public class LeaveReportService {
     private final AttendanceRepository attendanceRepository;
     private final LeaveRelaxationRepository leaveRelaxationRepository;
     private final QuarterLeaveResolver quarterLeaveResolver;
+    private final AttendancePeriodValidator periodValidator;
 
     public LeaveReportService(
             AttendanceQueryService attendanceQueryService,
@@ -46,13 +47,15 @@ public class LeaveReportService {
             ProjectResourceRepository projectResourceRepository,
             AttendanceRepository attendanceRepository,
             LeaveRelaxationRepository leaveRelaxationRepository,
-            QuarterLeaveResolver quarterLeaveResolver) {
+            QuarterLeaveResolver quarterLeaveResolver,
+            AttendancePeriodValidator periodValidator) {
         this.attendanceQueryService = attendanceQueryService;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
         this.attendanceRepository = attendanceRepository;
         this.leaveRelaxationRepository = leaveRelaxationRepository;
         this.quarterLeaveResolver = quarterLeaveResolver;
+        this.periodValidator = periodValidator;
     }
 
     /** The resource's active project assignment, resolved by attendanceId (res_id). */
@@ -244,6 +247,9 @@ public class LeaveReportService {
         LocalDate quarterStart = LocalDate.of(year, months.get(0), 1);
         LocalDate quarterEnd = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
+
+        periodValidator.validate(quarterStart, quarterEnd, filterProjectId, attendanceId,
+                "Q" + quarter + " " + year);
 
         Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
         List<Attendance> attendanceRows = resource

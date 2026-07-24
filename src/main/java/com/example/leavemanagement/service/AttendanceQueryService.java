@@ -72,6 +72,7 @@ public class AttendanceQueryService {
     private final LeavePolicyClient leavePolicyClient;
     private final LeaveRelaxationRepository leaveRelaxationRepository;
     private final QuarterLeaveResolver quarterLeaveResolver;
+    private final AttendancePeriodValidator periodValidator;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
@@ -81,7 +82,8 @@ public class AttendanceQueryService {
             ProjectResourceRepository projectResourceRepository,
             LeavePolicyClient leavePolicyClient,
             LeaveRelaxationRepository leaveRelaxationRepository,
-            QuarterLeaveResolver quarterLeaveResolver) {
+            QuarterLeaveResolver quarterLeaveResolver,
+            AttendancePeriodValidator periodValidator) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
@@ -90,6 +92,7 @@ public class AttendanceQueryService {
         this.leavePolicyClient = leavePolicyClient;
         this.leaveRelaxationRepository = leaveRelaxationRepository;
         this.quarterLeaveResolver = quarterLeaveResolver;
+        this.periodValidator = periodValidator;
     }
 
     // ------------------------------------------------------------------
@@ -268,7 +271,9 @@ public class AttendanceQueryService {
         validateMonthAndYear(year, month);
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
-        return projectDashboard(projectId, start, end, start.format(MONTH_YEAR), 1);
+        String label = start.format(MONTH_YEAR);
+        periodValidator.validate(start, end, projectId, null, label);
+        return projectDashboard(projectId, start, end, label, 1);
     }
 
     /** One resource's summary for one month. */
@@ -277,7 +282,9 @@ public class AttendanceQueryService {
         validateMonthAndYear(year, month);
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
-        AttendanceReportSummary summary = employeeSummary(resourceId, start, end, start.format(MONTH_YEAR), 1);
+        String label = start.format(MONTH_YEAR);
+        periodValidator.validate(start, end, null, resourceId, label);
+        AttendanceReportSummary summary = employeeSummary(resourceId, start, end, label, 1);
         List<AttendanceReportSummary> rows = List.of(summary);
         return new AttendanceReportResult(summary.period(), 1, buildAttendanceTotals(rows), rows);
     }
@@ -315,6 +322,7 @@ public class AttendanceQueryService {
     private AttendanceReportResult scopedReport(
             String projectId, String resourceId, LocalDate start, LocalDate end,
             String periodLabel, int numberOfMonths) {
+        periodValidator.validate(start, end, projectId, resourceId, periodLabel);
         if (resourceId != null && !resourceId.isBlank()) {
             AttendanceReportSummary summary =
                     employeeSummary(resourceId, start, end, periodLabel, numberOfMonths);
@@ -477,7 +485,9 @@ public class AttendanceQueryService {
     public List<MonthlyResourceCost> monthlyCostReport(String projectId, int year, int month) {
         validateMonthAndYear(year, month);
         LocalDate monthStart = LocalDate.of(year, month, 1);
+        LocalDate monthEnd = monthStart.withDayOfMonth(monthStart.lengthOfMonth());
         String periodLabel = monthStart.format(MONTH_YEAR);
+        periodValidator.validate(monthStart, monthEnd, projectId, null, periodLabel);
         return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
                 .map(ProjectResource::getResource)
                 .map(resource -> buildMonthlyCost(resource, projectId, monthStart, periodLabel))
@@ -496,6 +506,8 @@ public class AttendanceQueryService {
                 .map(ProjectResource::getProjectId)
                 .orElse(null);
         LocalDate monthStart = LocalDate.of(year, month, 1);
+        LocalDate monthEnd = monthStart.withDayOfMonth(monthStart.lengthOfMonth());
+        periodValidator.validate(monthStart, monthEnd, projectId, resourceId, monthStart.format(MONTH_YEAR));
         return buildMonthlyCost(resource, projectId, monthStart, monthStart.format(MONTH_YEAR));
     }
 
@@ -527,6 +539,10 @@ public class AttendanceQueryService {
 
     private ResourceCostResult costSummaryReport(
             String projectId, String resourceId, int year, List<Integer> months, String periodLabel) {
+        LocalDate periodStart = LocalDate.of(year, months.get(0), 1);
+        LocalDate periodEnd = LocalDate.of(year, months.get(months.size() - 1), 1);
+        periodEnd = periodEnd.withDayOfMonth(periodEnd.lengthOfMonth());
+        periodValidator.validate(periodStart, periodEnd, projectId, resourceId, periodLabel);
         List<ResourceCostSummary> rows;
         if (resourceId != null && !resourceId.isBlank()) {
             MasterResource resource = masterResourceRepository
@@ -723,6 +739,7 @@ public class AttendanceQueryService {
         LocalDate quarterEnd = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
 
+        periodValidator.validate(quarterStart, quarterEnd, projectId, null, "Q" + quarter + " " + year);
         List<Attendance> rows = (projectId == null || projectId.isBlank())
                 ? attendanceRepository.findByAttendanceDateBetween(quarterStart, quarterEnd)
                 : attendanceRepository.findByProjectIdAndAttendanceDateBetween(projectId, quarterStart, quarterEnd);

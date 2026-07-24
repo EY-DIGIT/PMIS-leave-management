@@ -7,6 +7,7 @@ import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
@@ -29,4 +30,19 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
     @Modifying
     @Query("DELETE FROM Attendance a WHERE a.projectId = :projectId AND a.attendanceDate BETWEEN :start AND :end")
     void bulkDeleteByProjectIdAndDateBetween(String projectId, LocalDate start, LocalDate end);
+
+    // ------------------------------------------------------------------
+    // Existence checks — used by AttendancePeriodValidator to verify that
+    // attendance data has been uploaded before any report is generated.
+    // ------------------------------------------------------------------
+
+    boolean existsByAttendanceDateBetween(LocalDate start, LocalDate end);
+
+    boolean existsByProjectIdAndAttendanceDateBetween(String projectId, LocalDate start, LocalDate end);
+
+    @Query("SELECT COUNT(a) > 0 FROM Attendance a WHERE a.resource.resId = :resId AND a.attendanceDate BETWEEN :start AND :end")
+    boolean existsByResIdAndDateBetween(
+            @Param("resId") String resId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
 }
