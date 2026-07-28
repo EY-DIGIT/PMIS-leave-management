@@ -12,7 +12,11 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
@@ -69,6 +73,13 @@ public class LeaveRelaxation {
     @Column(name = "relaxation_days", nullable = false)
     private double relaxationDays;
 
+    /** ISO-8601 dates approved for relaxation, stored as comma-separated string. */
+    @Column(name = "relaxation_dates", length = 2000)
+    private String relaxationDatesRaw;
+
+    @Column(name = "relaxation_cost")
+    private Double relaxationCost;
+
     @Column(name = "final_paid_leave", nullable = false)
     private double finalPaidLeave;
 
@@ -108,6 +119,21 @@ public class LeaveRelaxation {
         this.projectId = projectId;
         this.year = year;
         this.quarter = quarter;
+    }
+
+    public List<LocalDate> getRelaxationDates() {
+        if (relaxationDatesRaw == null || relaxationDatesRaw.isBlank()) return List.of();
+        return Arrays.stream(relaxationDatesRaw.split(",")).map(LocalDate::parse).toList();
+    }
+
+    public void setRelaxationDates(List<LocalDate> dates) {
+        relaxationDatesRaw = (dates == null || dates.isEmpty())
+                ? ""
+                : dates.stream().map(LocalDate::toString).collect(Collectors.joining(","));
+    }
+
+    public double getRelaxationCost() {
+        return relaxationCost != null ? relaxationCost : 0.0;
     }
 
     @PrePersist

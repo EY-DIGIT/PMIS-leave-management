@@ -134,26 +134,31 @@ public class QuarterLeavePolicy {
                 // Fully covered by quota.
                 remaining -= wd.weight();
                 paidAccum += wd.weight();
-                paidDates.add(wd.date());
+                // Only full-absent days go into paidDates; half-days are tracked via the
+                // caller's halfDayDates list to keep the three date lists mutually exclusive.
+                if (wd.weight() == 1.0) {
+                    paidDates.add(wd.date());
+                }
             } else if (remaining > 0.0) {
-                // Partially covered — quota runs out mid-day.
+                // Boundary: quota runs out mid full-absent day (weight is always 1.0 here because
+                // remaining is always a multiple of 0.5 and half-days are exactly 0.5 — they
+                // never partially straddle the quota boundary).
                 paidAccum += remaining;
                 unpaidAccum += wd.weight() - remaining;
                 remaining = 0.0;
-                paidDates.add(wd.date());   // partially paid
-                unpaidDates.add(wd.date()); // partially unpaid
-                if (wd.weight() == 1.0) {
-                    unpaidFullAbsentSet.add(wd.date()); // can still trigger sandwich
-                }
+                // Place the boundary date in unpaidDates only (it has an unpaid component) so
+                // each date appears in at most one of paidDates / unpaidDates.
+                unpaidDates.add(wd.date());
+                unpaidFullAbsentSet.add(wd.date()); // has unpaid component → sandwich eligible
             } else {
                 // Entirely unpaid.
                 unpaidAccum += wd.weight();
-                unpaidDates.add(wd.date());
                 if (wd.weight() == 1.0) {
+                    unpaidDates.add(wd.date());
                     unpaidFullAbsentSet.add(wd.date()); // full absent day → sandwich eligible
                 }
-                // Half-day dates intentionally NOT added to unpaidFullAbsentSet:
-                // the employee worked that day so sandwich does not apply.
+                // Half-day dates: tracked via caller's halfDayDates only; they never trigger
+                // sandwich leave because the employee worked that day.
             }
         }
 

@@ -6,6 +6,7 @@ import com.example.leavemanagement.dto.LeaveReportSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
+import com.example.leavemanagement.dto.RelaxationEligibilityResponse;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.LeaveRelaxation;
@@ -17,11 +18,15 @@ import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
+import com.example.leavemanagement.repository.ProjectYearMappingRepository;
 import com.example.leavemanagement.security.CurrentUser;
 import com.example.leavemanagement.security.CurrentUserContext;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -40,6 +45,7 @@ public class LeaveReportService {
     private final LeaveRelaxationRepository leaveRelaxationRepository;
     private final QuarterLeaveResolver quarterLeaveResolver;
     private final AttendancePeriodValidator periodValidator;
+    private final ProjectYearMappingRepository yearMappingRepository;
 
     public LeaveReportService(
             AttendanceQueryService attendanceQueryService,
@@ -48,7 +54,8 @@ public class LeaveReportService {
             AttendanceRepository attendanceRepository,
             LeaveRelaxationRepository leaveRelaxationRepository,
             QuarterLeaveResolver quarterLeaveResolver,
-            AttendancePeriodValidator periodValidator) {
+            AttendancePeriodValidator periodValidator,
+            ProjectYearMappingRepository yearMappingRepository) {
         this.attendanceQueryService = attendanceQueryService;
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
@@ -56,6 +63,7 @@ public class LeaveReportService {
         this.leaveRelaxationRepository = leaveRelaxationRepository;
         this.quarterLeaveResolver = quarterLeaveResolver;
         this.periodValidator = periodValidator;
+        this.yearMappingRepository = yearMappingRepository;
     }
 
     /** The resource's active project assignment, resolved by attendanceId (res_id). */
@@ -105,28 +113,33 @@ public class LeaveReportService {
     }
 
     /**
-     * Incrementally adds relaxation days for one resource's quarter.
+     * Approves specific unpaid leave dates as relaxation leave for one resource's quarter.
      *
-     * <p>Each call adds {@code request.relaxationDays()} to the running cumulative total, moving
-     * that many days from unpaid leave into relaxation leave. The increment is silently clamped to
-     * the remaining unpaid leave so it is never possible to approve more relaxation than exists.
-     *
-     * <p>Formula on every call:
-     * <pre>
-     *   applied            = MIN(requested, raw.unpaidLeave - prevCumulativeRelaxation)
-     *   newRelaxationTotal = prevCumulativeRelaxation + applied
-     *   finalUnpaidLeave   = raw.unpaidLeave - newRelaxationTotal
-     * </pre>
+     * <p>Each call adds the selected dates to the cumulative approved set. Dates must be actual
+     * unpaid leave dates for this resource's quarter and must not have been previously approved.
+     * Per-day cost is calculated per month: {@code monthlyRate / calendarDaysInMonth}, so dates
+     * from different months are priced independently.
      */
     @Transactional
     public EmployeeLeaveDetail applyQuarterlyRelaxation(
             QuarterlyRelaxationRequest request, MultipartFile attachment) {
-        if (request.relaxationDays() < 0) {
-            throw new BadRequestException("relaxationDays must be >= 0");
+        List<LocalDate> requestedDates = request.relaxationDates();
+        if (requestedDates == null || requestedDates.isEmpty()) {
+            throw new BadRequestException("At least one relaxation date must be selected");
         }
 
         EmployeeLeaveDetail raw =
                 rawEmployeeDetail(request.resourceId(), request.year(), request.quarter(), request.projectId());
+
+        // Validate: every requested date must be an actual unpaid leave date.
+        Set<LocalDate> unpaidSet = new HashSet<>(raw.unpaidLeaveDates());
+        for (LocalDate date : requestedDates) {
+            if (!unpaidSet.contains(date)) {
+                throw new BadRequestException(
+                        "Date " + date + " is not an unpaid leave date for this resource in Q"
+                                + request.quarter() + " " + request.year());
+            }
+        }
 
         MasterResource resource = masterResourceRepository
                 .findByResId(request.resourceId())
@@ -136,23 +149,50 @@ public class LeaveReportService {
                         request.resourceId(), request.projectId(), request.year(), request.quarter())
                 .orElseGet(() -> new LeaveRelaxation(resource, request.projectId(), request.year(), request.quarter()));
 
-        // Cumulative relaxation already approved in prior calls (0 for a brand-new record).
-        double prevRelaxationDays = relaxation.getRelaxationDays();
+        // Reject dates already approved in a previous call.
+        Set<LocalDate> alreadyApproved = new HashSet<>(relaxation.getRelaxationDates());
+        List<LocalDate> freshDates = requestedDates.stream()
+                .filter(d -> !alreadyApproved.contains(d))
+                .toList();
+        if (freshDates.isEmpty()) {
+            throw new BadRequestException("All selected dates have already been approved for relaxation");
+        }
 
-        // Remaining unpaid leave not yet converted to relaxation (may be fractional due to half-days).
-        double remainingUnpaid = Math.max(0.0, raw.unpaidLeave() - prevRelaxationDays);
+        // Per-day cost: monthlyRate / calendar-days-in-that-month, rate year resolved per date
+        // from project-year mapping (falls back to the static rateYear on the assignment).
+        ProjectResource assignment = projectResourceRepository
+                .findByResource_ResIdAndProjectIdAndActiveTrue(request.resourceId(), request.projectId())
+                .orElse(null);
+        double newCost = 0;
+        if (assignment != null) {
+            String organisationId = assignment.getOrganisationId();
+            for (LocalDate date : freshDates) {
+                String rateYear = yearMappingRepository
+                        .findEffectiveOn(request.projectId(), organisationId, date)
+                        .map(m -> m.getRateYear())
+                        .orElse(assignment.getRateYear());
+                Double monthlyRate = rateYear != null ? assignment.getRateCardByYear().get(rateYear) : null;
+                if (monthlyRate != null) {
+                    newCost += monthlyRate / date.lengthOfMonth();
+                }
+            }
+        }
 
-        // Clamp the increment — never approve more than what's still available.
-        double approved = Math.min(request.relaxationDays(), remainingUnpaid);
+        // Merge new dates with previously approved ones.
+        List<LocalDate> allDates = new ArrayList<>(alreadyApproved);
+        allDates.addAll(freshDates);
+        allDates.sort(Comparator.naturalOrder());
 
-        double newTotalRelaxation = prevRelaxationDays + approved;
-        double newFinalUnpaid     = raw.unpaidLeave() - newTotalRelaxation;
+        double totalRelaxDays = allDates.size();
+        double totalRelaxCost = round2(relaxation.getRelaxationCost() + newCost);
 
         relaxation.setOriginalPaidLeave(raw.paidLeave());
         relaxation.setOriginalUnpaidLeave(raw.unpaidLeave());
-        relaxation.setRelaxationDays(newTotalRelaxation);
+        relaxation.setRelaxationDates(allDates);
+        relaxation.setRelaxationDays(totalRelaxDays);
+        relaxation.setRelaxationCost(totalRelaxCost);
         relaxation.setFinalPaidLeave(raw.paidLeave());
-        relaxation.setFinalUnpaidLeave(newFinalUnpaid);
+        relaxation.setFinalUnpaidLeave(Math.max(0.0, raw.unpaidLeave() - totalRelaxDays));
         relaxation.setRemarks(request.remarks());
         if (attachment != null && !attachment.isEmpty()) {
             try {
@@ -165,12 +205,31 @@ public class LeaveReportService {
         }
         relaxation.setApprovedBy(currentUserIdentifier());
         relaxation.setApprovedAt(LocalDateTime.now());
-        // Always use the entity returned by save() — JPA merge can return a different managed
-        // instance than the local variable, so discarding the return value risks using a stale
-        // (pre-update) relaxationDays when building the response, which produces reversed values.
         relaxation = leaveRelaxationRepository.save(relaxation);
 
         return applyRelaxation(raw, relaxation);
+    }
+
+    /**
+     * Returns which unpaid leave dates are still eligible for relaxation approval (not yet
+     * approved), along with the already-approved dates and cost for this resource's quarter.
+     */
+    @Transactional(readOnly = true)
+    public RelaxationEligibilityResponse eligibleRelaxationDates(
+            String resourceId, String projectId, int year, int quarter) {
+        EmployeeLeaveDetail raw = rawEmployeeDetail(resourceId, year, quarter, projectId);
+        List<LocalDate> unpaidDates = raw.unpaidLeaveDates();
+
+        Optional<LeaveRelaxation> existing = leaveRelaxationRepository
+                .findByResource_ResIdAndProjectIdAndYearAndQuarter(resourceId, projectId, year, quarter);
+        List<LocalDate> approvedDates = existing.map(LeaveRelaxation::getRelaxationDates).orElse(List.of());
+        double approvedCost = existing.map(LeaveRelaxation::getRelaxationCost).orElse(0.0);
+
+        Set<LocalDate> approvedSet = new HashSet<>(approvedDates);
+        List<LocalDate> eligible = unpaidDates.stream().filter(d -> !approvedSet.contains(d)).toList();
+
+        return new RelaxationEligibilityResponse(
+                resourceId, projectId, year, quarter, unpaidDates, approvedDates, eligible, approvedCost);
     }
 
     /** Returns the stored evidence attachment for a relaxation record, or throws if none exists. */
@@ -210,6 +269,7 @@ public class LeaveReportService {
                 raw.projectName(),
                 raw.milestoneId(),
                 raw.activityId(),
+                raw.designation(),
                 raw.joiningDate(),
                 raw.year(),
                 raw.quarter(),
@@ -228,6 +288,10 @@ public class LeaveReportService {
                 raw.paidLeaveDates(),
                 raw.unpaidLeaveDates(),
                 raw.sandwichDates());
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     private String currentUserIdentifier() {
@@ -295,6 +359,7 @@ public class LeaveReportService {
                 quarterLeaveResolver.calculate(resourceId, projectId, joiningDate, year, quarter,
                         absentDates, halfDayDates);
 
+        String designation = assignment != null ? assignment.getRole() : null;
         List<LocalDate> sortedHalfDayDates = halfDayDates.stream().sorted().toList();
         return new EmployeeLeaveDetail(
                 attendanceId,
@@ -303,6 +368,7 @@ public class LeaveReportService {
                 projectName,
                 milestoneId,
                 activityId,
+                designation,
                 joiningDate,
                 year,
                 quarter,

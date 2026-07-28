@@ -138,8 +138,9 @@ public class MasterResourceService {
         }
 
         if (active.isPresent() && Objects.equals(active.get().getRole(), row.role()) && row.active()) {
-            // Same project, same role: refresh the rate card from the designation master in place.
+            // Same project, same role: refresh the rate card and organisationId in place.
             ProjectResource assignment = active.get();
+            assignment.setOrganisationId(organisationId);
             assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
             projectResourceRepository.save(assignment);
             return;
@@ -165,6 +166,7 @@ public class MasterResourceService {
         if (row.active()) {
             // Brand-new assignment: first-time upload, rejoin, or role change on the same project.
             ProjectResource assignment = new ProjectResource(resource, projectId, row.role(), row.dateOfJoining());
+            assignment.setOrganisationId(organisationId);
             assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
             projectResourceRepository.save(assignment);
         }

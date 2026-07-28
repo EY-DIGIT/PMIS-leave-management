@@ -52,6 +52,9 @@ public class ProjectResource {
     @Setter(AccessLevel.NONE)
     private String projectId;
 
+    @Column(name = "organisation_id", length = 100)
+    private String organisationId;
+
     @Column(name = "role", length = 200)
     private String role;
 

@@ -10,16 +10,17 @@ import static org.mockito.AdditionalAnswers.returnsFirstArg;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
+import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
-import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
+import com.example.leavemanagement.repository.ProjectYearMappingRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -60,6 +61,9 @@ class LeaveReportServiceTest {
     @Mock
     private AttendancePeriodValidator periodValidator;
 
+    @Mock
+    private ProjectYearMappingRepository yearMappingRepository;
+
     // Real engine, same as AttendanceQueryServiceTest.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -71,7 +75,8 @@ class LeaveReportServiceTest {
                 attendanceRepository, publicHolidayRepository, leavePolicyClient, policy);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
-                attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver, periodValidator);
+                attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver, periodValidator,
+                yearMappingRepository);
     }
 
     private void setId(MasterResource resource, long id) {
@@ -107,7 +112,7 @@ class LeaveReportServiceTest {
         when(publicHolidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
                 .thenReturn(List.of());
         List<Attendance> rows = absentDates.stream()
-                .map(date -> new Attendance(resource, projectId, "M1", null, date, AttendanceStatus.A))
+                .map(date -> new Attendance(resource, projectId, null, "M1", null,date, AttendanceStatus.A))
                 .toList();
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         id, LocalDate.of(2026, 4, 1), LocalDate.of(2026, 6, 30)))
@@ -115,16 +120,20 @@ class LeaveReportServiceTest {
         return resource;
     }
 
+    // Unpaid leave dates in Q2 2026: Apr 9 and Apr 10 (6 permissible leave covers Apr 1-3,6-8).
+    private static final LocalDate APR9  = LocalDate.of(2026, 4, 9);
+    private static final LocalDate APR10 = LocalDate.of(2026, 4, 10);
+
     @Test
     void applyQuarterlyRelaxationReducesUnpaidLeaveAndKeepsPaidLeaveUnchanged() {
         stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
         when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 2))
                 .thenReturn(Optional.empty());
-        // save() must return the entity so applyRelaxation can use the persisted state.
         when(leaveRelaxationRepository.save(any())).thenAnswer(org.mockito.AdditionalAnswers.returnsFirstArg());
 
-        QuarterlyRelaxationRequest request =
-                new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 1, "Approved by UIDAI on medical grounds.");
+        // Select Apr 9 (first unpaid date) for relaxation.
+        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest(
+                "E1", "P1", 2026, 2, List.of(APR9), "Approved by UIDAI on medical grounds.");
         EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request, null);
 
         assertThat(result.paidLeave()).isEqualTo(6);
@@ -137,6 +146,7 @@ class LeaveReportServiceTest {
         assertThat(saved.getOriginalPaidLeave()).isEqualTo(6);
         assertThat(saved.getOriginalUnpaidLeave()).isEqualTo(2);
         assertThat(saved.getRelaxationDays()).isEqualTo(1);
+        assertThat(saved.getRelaxationDates()).containsExactly(APR9);
         assertThat(saved.getFinalPaidLeave()).isEqualTo(6);
         assertThat(saved.getFinalUnpaidLeave()).isEqualTo(1);
         assertThat(saved.getRemarks()).isEqualTo("Approved by UIDAI on medical grounds.");
@@ -144,14 +154,15 @@ class LeaveReportServiceTest {
     }
 
     @Test
-    void applyQuarterlyRelaxationClampsDaysBeyondUnpaidLeave() {
+    void applyQuarterlyRelaxationApprovesAllUnpaidDates() {
         stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
         when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 2))
                 .thenReturn(Optional.empty());
         when(leaveRelaxationRepository.save(any())).thenAnswer(returnsFirstArg());
 
-        // Only 2 unpaid days exist; requesting 3 is silently clamped to 2.
-        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 3, null);
+        // Select both unpaid dates (Apr 9 and Apr 10).
+        QuarterlyRelaxationRequest request =
+                new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, List.of(APR9, APR10), null);
         EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request, null);
 
         assertThat(result.relaxationLeave()).isEqualTo(2);
@@ -159,39 +170,57 @@ class LeaveReportServiceTest {
 
         ArgumentCaptor<LeaveRelaxation> captor = ArgumentCaptor.forClass(LeaveRelaxation.class);
         verify(leaveRelaxationRepository).save(captor.capture());
-        assertThat(captor.getValue().getRelaxationDays()).isEqualTo(2); // clamped, not 3
+        assertThat(captor.getValue().getRelaxationDays()).isEqualTo(2);
+        assertThat(captor.getValue().getRelaxationDates()).containsExactly(APR9, APR10);
+    }
+
+    @Test
+    void applyQuarterlyRelaxationRejectsDateNotInUnpaidList() {
+        stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
+
+        // Apr 8 is a paid leave date, not an unpaid one — should be rejected before touching the DB.
+        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest(
+                "E1", "P1", 2026, 2, List.of(LocalDate.of(2026, 4, 8)), null);
+
+        assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request, null))
+                .isInstanceOf(BadRequestException.class);
     }
 
     @Test
     void applyQuarterlyRelaxationAccumulatesAcrossTwoCalls() {
         stubResourceWithAbsences("E1", 1L, "P1", eightWeekdaysInQ2());
 
-        // First call: approve 1 of 2 available unpaid days.
+        // First call already saved: Apr 9 approved.
         LeaveRelaxation firstRecord = new LeaveRelaxation(
                 masterResourceRepository.findByResId("E1").orElseThrow(), "P1", 2026, 2);
-        firstRecord.setRelaxationDays(1); // simulates a previously saved record with 1 day
+        firstRecord.setRelaxationDays(1);
+        firstRecord.setRelaxationDates(List.of(APR9));
         when(leaveRelaxationRepository.findByResource_ResIdAndProjectIdAndYearAndQuarter("E1", "P1", 2026, 2))
                 .thenReturn(Optional.of(firstRecord));
         when(leaveRelaxationRepository.save(any())).thenAnswer(returnsFirstArg());
 
-        // Second call: approve 1 more — should accumulate to 2 total, not overwrite.
-        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, 1, null);
+        // Second call: approve Apr 10 — should accumulate to 2 total.
+        QuarterlyRelaxationRequest request =
+                new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, List.of(APR10), null);
         EmployeeLeaveDetail result = service.applyQuarterlyRelaxation(request, null);
 
         assertThat(result.relaxationLeave()).isEqualTo(2); // 1 prev + 1 new
-        assertThat(result.unpaidLeave()).isEqualTo(0);     // 2 total relaxation covers both unpaid days
+        assertThat(result.unpaidLeave()).isEqualTo(0);
 
         ArgumentCaptor<LeaveRelaxation> captor = ArgumentCaptor.forClass(LeaveRelaxation.class);
         verify(leaveRelaxationRepository).save(captor.capture());
-        assertThat(captor.getValue().getRelaxationDays()).isEqualTo(2); // cumulative total
+        assertThat(captor.getValue().getRelaxationDays()).isEqualTo(2);
+        assertThat(captor.getValue().getRelaxationDates()).containsExactlyInAnyOrder(APR9, APR10);
     }
 
     @Test
-    void applyQuarterlyRelaxationRejectsNegativeDays() {
+    void applyQuarterlyRelaxationRejectsEmptyDateList() {
         // No resource stubs needed — the guard throws before any repository is consulted.
-        QuarterlyRelaxationRequest request = new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, -1, null);
+        QuarterlyRelaxationRequest request =
+                new QuarterlyRelaxationRequest("E1", "P1", 2026, 2, List.of(), null);
 
-        assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request, null)).isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> service.applyQuarterlyRelaxation(request, null))
+                .isInstanceOf(BadRequestException.class);
     }
 
     @Test

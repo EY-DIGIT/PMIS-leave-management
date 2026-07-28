@@ -53,6 +53,9 @@ public class Attendance {
     @Column(name = "project_id", nullable = false, length = 50)
     private String projectId;
 
+    @Column(name = "organisation_id", length = 50)
+    private String organisationId;
+
     @Column(name = "milestone_id", nullable = false, length = 50)
     private String milestoneId;
 
@@ -87,12 +90,14 @@ public class Attendance {
     public Attendance(
             MasterResource resource,
             String projectId,
+            String organisationId,
             String milestoneId,
             String activityId,
             LocalDate attendanceDate,
             AttendanceStatus status) {
         this.resource = resource;
         this.projectId = projectId;
+        this.organisationId = organisationId;
         this.milestoneId = milestoneId;
         this.activityId = activityId;
         this.attendanceDate = attendanceDate;

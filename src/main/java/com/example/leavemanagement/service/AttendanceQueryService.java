@@ -27,6 +27,7 @@ import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
+import com.example.leavemanagement.repository.ProjectYearMappingRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -73,6 +74,7 @@ public class AttendanceQueryService {
     private final LeaveRelaxationRepository leaveRelaxationRepository;
     private final QuarterLeaveResolver quarterLeaveResolver;
     private final AttendancePeriodValidator periodValidator;
+    private final ProjectYearMappingRepository yearMappingRepository;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
@@ -83,7 +85,8 @@ public class AttendanceQueryService {
             LeavePolicyClient leavePolicyClient,
             LeaveRelaxationRepository leaveRelaxationRepository,
             QuarterLeaveResolver quarterLeaveResolver,
-            AttendancePeriodValidator periodValidator) {
+            AttendancePeriodValidator periodValidator,
+            ProjectYearMappingRepository yearMappingRepository) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
@@ -93,6 +96,7 @@ public class AttendanceQueryService {
         this.leaveRelaxationRepository = leaveRelaxationRepository;
         this.quarterLeaveResolver = quarterLeaveResolver;
         this.periodValidator = periodValidator;
+        this.yearMappingRepository = yearMappingRepository;
     }
 
     // ------------------------------------------------------------------
@@ -109,6 +113,7 @@ public class AttendanceQueryService {
     @Transactional
     public AttendanceUploadResult upload(
             String projectId,
+            String organisationId,
             String milestoneId,
             String activityId,
             LocalDate startDate,
@@ -139,10 +144,10 @@ public class AttendanceQueryService {
                 Attendance row;
                 if (workedMinutes != null && workedMinutes > 0) {
                     AttendanceStatus status = workedMinutes >= thresholds[0] ? AttendanceStatus.P : AttendanceStatus.HD;
-                    row = new Attendance(resource, projectId, milestoneId, activityId, date, status);
+                    row = new Attendance(resource, projectId, organisationId, milestoneId, activityId, date, status);
                     row.setWorkingHours(Math.round(workedMinutes / 60.0 * 100) / 100.0);
                 } else {
-                    row = new Attendance(resource, projectId, milestoneId, activityId, date, AttendanceStatus.A);
+                    row = new Attendance(resource, projectId, organisationId, milestoneId, activityId, date, AttendanceStatus.A);
                 }
                 attendanceRepository.save(row);
             }
@@ -568,61 +573,121 @@ public class AttendanceQueryService {
     }
 
     private ResourceCostTotals buildCostTotals(List<ResourceCostSummary> rows) {
-        double totalCost             = round2(rows.stream().mapToDouble(ResourceCostSummary::totalCost).sum());
-        double totalRelaxationAmount = round2(rows.stream().mapToDouble(ResourceCostSummary::relaxationAmount).sum());
-        double totalDeducted         = round2(rows.stream()
-                .flatMap(r -> r.monthlyBreakdown().stream())
-                .mapToDouble(MonthlyResourceCost::deductedAmount)
-                .sum());
-        return new ResourceCostTotals(rows.size(), totalCost, totalRelaxationAmount, totalDeducted);
+        double totalCost         = round2(rows.stream().mapToDouble(ResourceCostSummary::totalCost).sum());
+        double totalRelaxation   = round2(rows.stream().mapToDouble(ResourceCostSummary::relaxationCost).sum());
+        double totalDeducted     = round2(rows.stream().mapToDouble(ResourceCostSummary::deductedAmount).sum());
+        return new ResourceCostTotals(rows.size(), totalCost, totalRelaxation, totalDeducted);
     }
 
     private ResourceCostSummary buildCostSummary(
             MasterResource resource, String projectId, int year, List<Integer> months, String periodLabel) {
+        // Monthly breakdown — informational; the authoritative quarterly total may differ because
+        // the quarterly leave resolver applies the full quarterly policy (sandwich, carry-forward).
         List<MonthlyResourceCost> monthly = months.stream()
                 .map(month -> buildMonthlyCost(resource, projectId, LocalDate.of(year, month, 1),
                         LocalDate.of(year, month, 1).format(MONTH_YEAR)))
                 .toList();
 
-        double sumMonthlyCost = monthly.stream().mapToDouble(MonthlyResourceCost::cost).sum();
+        // Look up assignment once for joining date and rate card; rate year is resolved per quarter.
+        ProjectResource assignment = projectId == null ? null
+                : projectResourceRepository
+                        .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), projectId)
+                        .orElse(null);
+        LocalDate joiningDate = assignment != null && assignment.getAssignmentStartDate() != null
+                ? assignment.getAssignmentStartDate()
+                : resource.getDateOfJoining();
 
-        // Relaxation is a quarterly settlement, not monthly. For each quarter covered by the
-        // months list, compute: perDayRate = quarterlyRate / quarterWorkingDays, then
-        // relaxationAmount = relaxationDays × perDayRate.
+        // Per-quarter calendar-days-based cost calculation.
         Set<Integer> quarters = months.stream()
                 .map(m -> (m - 1) / 3 + 1)
                 .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
 
-        double totalRelaxationDays   = 0;
-        double totalRelaxationAmount = 0;
-        for (int quarter : quarters) {
-            // Collect the monthly cost rows that belong to this quarter.
-            List<MonthlyResourceCost> quarterMonths = new ArrayList<>();
-            for (int i = 0; i < months.size(); i++) {
-                if ((months.get(i) - 1) / 3 + 1 == quarter) {
-                    quarterMonths.add(monthly.get(i));
-                }
-            }
-            double quarterWorkingDays = quarterMonths.stream().mapToInt(MonthlyResourceCost::workingDays).sum();
-            double quarterlyRate      = quarterMonths.stream().mapToDouble(MonthlyResourceCost::monthlyRate).sum();
+        int totalCalendarDays = 0;
+        double totalPlannedCost = 0;
+        double totalUnpaidLeaveDays = 0;
+        double totalRelaxationDays = 0;
+        double totalRelaxationCost = 0;
 
-            if (quarterWorkingDays > 0 && quarterlyRate > 0 && projectId != null) {
+        for (int quarter : quarters) {
+            List<Integer> qMonths = months.stream()
+                    .filter(m -> (m - 1) / 3 + 1 == quarter)
+                    .toList();
+            LocalDate qStart = LocalDate.of(year, qMonths.get(0), 1);
+
+            // Resolve rate year from project-year mapping for this quarter's start date,
+            // falling back to the manually-set rateYear on the assignment.
+            String rateYear = resolveRateYear(
+                    projectId,
+                    assignment != null ? assignment.getOrganisationId() : null,
+                    qStart,
+                    assignment != null ? assignment.getRateYear() : null);
+            Double monthlyRate = (assignment != null && rateYear != null)
+                    ? assignment.getRateCardByYear().get(rateYear)
+                    : null;
+
+            int calDays = qMonths.stream().mapToInt(m -> LocalDate.of(year, m, 1).lengthOfMonth()).sum();
+            double planCost = monthlyRate != null ? monthlyRate * qMonths.size() : 0d;
+
+            // Quarterly leave settlement gives the authoritative unpaid-day count.
+            double unpaidDays = 0;
+            if (monthlyRate != null) {
+                LocalDate qEnd = LocalDate.of(year, qMonths.get(qMonths.size() - 1), 1)
+                        .withDayOfMonth(
+                                LocalDate.of(year, qMonths.get(qMonths.size() - 1), 1).lengthOfMonth());
+                List<Attendance> qRows = attendanceRepository
+                        .findByResourceIdAndAttendanceDateBetween(resource.getId(), qStart, qEnd);
+                Set<LocalDate> absentDates = qRows.stream()
+                        .filter(a -> a.getStatus() == AttendanceStatus.A)
+                        .map(Attendance::getAttendanceDate)
+                        .collect(Collectors.toCollection(java.util.HashSet::new));
+                Set<LocalDate> halfDayDates = qRows.stream()
+                        .filter(a -> a.getStatus() == AttendanceStatus.HD)
+                        .map(Attendance::getAttendanceDate)
+                        .collect(Collectors.toCollection(java.util.HashSet::new));
+                QuarterLeaveCalculation qCalc = quarterLeaveResolver.calculate(
+                        resource.getId(), projectId, joiningDate, year, quarter,
+                        absentDates, halfDayDates);
+                unpaidDays = qCalc.totalUnpaidDays();
+            }
+
+            double relaxDays = 0;
+            double relaxCost = 0;
+            if (projectId != null && monthlyRate != null) {
                 LeaveRelaxation relaxation = leaveRelaxationRepository
                         .findByResource_ResIdAndProjectIdAndYearAndQuarter(
                                 resource.getResId(), projectId, year, quarter)
                         .orElse(null);
                 if (relaxation != null && relaxation.getRelaxationDays() > 0) {
-                    double perDayRate = quarterlyRate / quarterWorkingDays;
-                    totalRelaxationDays   += relaxation.getRelaxationDays();
-                    totalRelaxationAmount += relaxation.getRelaxationDays() * perDayRate;
+                    relaxDays = relaxation.getRelaxationDays();
+                    // Use the pre-calculated per-month cost stored at approval time, which
+                    // prices each date at monthlyRate / calendarDaysInThatMonth rather than
+                    // spreading the quarterly rate evenly across all calendar days.
+                    relaxCost = relaxation.getRelaxationCost();
                 }
             }
+
+            totalCalendarDays += calDays;
+            totalPlannedCost += planCost;
+            totalUnpaidLeaveDays += unpaidDays;
+            totalRelaxationDays += relaxDays;
+            totalRelaxationCost += relaxCost;
         }
 
-        double totalCost = round2(sumMonthlyCost + totalRelaxationAmount);
+        double perDayCost = totalCalendarDays > 0 ? round2(totalPlannedCost / totalCalendarDays) : 0d;
+        double paidCalDays = totalCalendarDays - totalUnpaidLeaveDays;
+        double unitRate = totalCalendarDays > 0 ? totalPlannedCost / totalCalendarDays : 0d;
+        double deductedAmount = round2(totalUnpaidLeaveDays * unitRate);
+        double periodCost = round2(paidCalDays * unitRate);
+        double relaxationCost = round2(totalRelaxationCost);
+        double totalCost = round2(periodCost + relaxationCost);
+
         return new ResourceCostSummary(
                 resource.getResId(), resource.getName(), projectId, periodLabel,
-                totalCost, totalRelaxationDays, round2(totalRelaxationAmount), monthly);
+                totalCalendarDays, round2(totalPlannedCost), perDayCost,
+                totalUnpaidLeaveDays, round2(paidCalDays),
+                deductedAmount, periodCost,
+                totalRelaxationDays, relaxationCost, totalCost,
+                monthly);
     }
 
     private MonthlyResourceCost buildMonthlyCost(
@@ -644,28 +709,25 @@ public class AttendanceQueryService {
         AttendanceReportSummary attendance = buildSummary(
                 resource, projectId, monthStart, monthEnd, periodLabel, monthlyLeaveAllowance,
                 assignment != null ? assignment.getRole() : null);
-        String rateYear = assignment != null ? assignment.getRateYear() : null;
+        String rateYear = resolveRateYear(
+                projectId,
+                assignment != null ? assignment.getOrganisationId() : null,
+                monthStart,
+                assignment != null ? assignment.getRateYear() : null);
         Double monthlyRate = (assignment != null && rateYear != null)
                 ? assignment.getRateCardByYear().get(rateYear)
                 : null;
         double rate = monthlyRate != null ? monthlyRate : 0d;
 
-        // Relaxation is settled quarterly, not monthly — it is NOT added to effectivePaidDays here.
-        // See buildCostSummary for the quarterly relaxationAmount calculation.
-        double paidLeaveDaysApplied = attendance.paidLeaveDays();
-        double effectivePaidDays = Math.min(
-                attendance.workingDays(),
-                attendance.presentDays()        // P-days + HD×0.5 (worked portion)
-                        + paidLeaveDaysApplied); // leave-covered absent + half-day leave portion
-        // Per-day unit price and derived breakup amounts (0 when there's no rate / no working days).
-        double perDayRate = (monthlyRate != null && attendance.workingDays() > 0)
-                ? round2(monthlyRate / attendance.workingDays())
+        // Calendar-days-based cost: perDayRate = monthlyRate / calendarDays.
+        // Only unpaid leave reduces cost; paid leave, weekends, and holidays do not.
+        int calendarDays = monthStart.lengthOfMonth();
+        double unpaidLeaveDays = attendance.unpaidLeaveDays();
+        double paidCalendarDays = calendarDays - unpaidLeaveDays;
+        double perDayRate = monthlyRate != null ? round2(monthlyRate / calendarDays) : 0d;
+        double cost = monthlyRate != null
+                ? round2(monthlyRate * paidCalendarDays / calendarDays)
                 : 0d;
-        double halfDayAmount = round2(perDayRate * attendance.halfDays() * 0.5);
-        double cost = (monthlyRate != null && attendance.workingDays() > 0)
-                ? round2(monthlyRate * effectivePaidDays / attendance.workingDays())
-                : 0d;
-        // Amount lost to unpaid days (before relaxation) = full month rate minus attendance-based cost.
         double deductedAmount = monthlyRate != null ? round2(rate - cost) : 0d;
 
         return new MonthlyResourceCost(
@@ -680,12 +742,12 @@ public class AttendanceQueryService {
                 attendance.presentDays(),
                 attendance.halfDays(),
                 attendance.absentDays(),
-                paidLeaveDaysApplied,
-                round2(effectivePaidDays),
-                attendance.attendancePercentage(),
+                attendance.paidLeaveDays(),
+                calendarDays,
+                unpaidLeaveDays,
+                round2(paidCalendarDays),
                 rate,
                 perDayRate,
-                halfDayAmount,
                 deductedAmount,
                 cost);
     }
@@ -708,6 +770,22 @@ public class AttendanceQueryService {
             };
         }
         return 0;
+    }
+
+    /**
+     * Returns the rate year label (e.g. "Year-3") for the given project/organisation and date,
+     * using the project-year date ranges stored in {@code project_year_mapping}. Falls back to the
+     * manually-set {@code fallbackRateYear} from the {@code ProjectResource} assignment when no
+     * mapping exists (e.g. the designation rate was uploaded without project start/end dates).
+     */
+    private String resolveRateYear(
+            String projectId, String organisationId, LocalDate date, String fallbackRateYear) {
+        if (projectId != null && organisationId != null && date != null) {
+            return yearMappingRepository.findEffectiveOn(projectId, organisationId, date)
+                    .map(com.example.leavemanagement.entity.ProjectYearMapping::getRateYear)
+                    .orElse(fallbackRateYear);
+        }
+        return fallbackRateYear;
     }
 
     private double round2(double value) {

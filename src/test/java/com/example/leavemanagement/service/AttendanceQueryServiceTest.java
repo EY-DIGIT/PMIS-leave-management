@@ -72,6 +72,9 @@ class AttendanceQueryServiceTest {
     @Mock
     private AttendancePeriodValidator periodValidator;
 
+    @Mock
+    private com.example.leavemanagement.repository.ProjectYearMappingRepository yearMappingRepository;
+
     // Real engine — the quarterly-settlement path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -84,7 +87,7 @@ class AttendanceQueryServiceTest {
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
-                quarterLeaveResolver, periodValidator);
+                quarterLeaveResolver, periodValidator, yearMappingRepository);
     }
 
     private MultipartFile anyFile() {
@@ -132,7 +135,7 @@ class AttendanceQueryServiceTest {
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         AttendanceUploadResult result = service.upload(
-                "P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile());
+                "P1", null, "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile());
 
         assertThat(result.resourcesStored()).isEqualTo(1);
         assertThat(result.leavePoliciesByProject()).containsKey("P1");
@@ -159,7 +162,7 @@ class AttendanceQueryServiceTest {
                 .thenReturn(List.of(new com.example.leavemanagement.entity.PublicHoliday(
                         LocalDate.of(2026, 7, 6), "Test Holiday")));
 
-        service.upload("P1", "M1", null, LocalDate.of(2026, 7, 3), LocalDate.of(2026, 7, 6), null, anyFile());
+        service.upload("P1", null, "M1", null, LocalDate.of(2026, 7, 3), LocalDate.of(2026, 7, 6), null, anyFile());
 
         // Only Friday (the one working, non-holiday day) gets a row.
         verify(attendanceRepository, times(1)).save(any());
@@ -172,7 +175,7 @@ class AttendanceQueryServiceTest {
         when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.upload(
-                        "P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
+                        "P1", null, "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 does not exist."));
@@ -189,7 +192,7 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.upload(
-                        "P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
+                        "P1", null, "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 is inactive."));
@@ -203,7 +206,7 @@ class AttendanceQueryServiceTest {
         stubActiveResource("E1", "P1", 1L);
 
         assertThatThrownBy(() -> service.upload(
-                        "P2", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
+                        "P2", null, "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3), null, anyFile()))
                 .isInstanceOf(AttendanceValidationException.class)
                 .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
                         .containsExactly("Resource E1 belongs to project P1, not P2."));
@@ -213,7 +216,7 @@ class AttendanceQueryServiceTest {
     @Test
     void uploadRejectsStartDateAfterEndDate() {
         assertThatThrownBy(() -> service.upload(
-                        "P1", "M1", null, LocalDate.of(2026, 7, 20), LocalDate.of(2026, 7, 4), null, anyFile()))
+                        "P1", null, "M1", null, LocalDate.of(2026, 7, 20), LocalDate.of(2026, 7, 4), null, anyFile()))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessage("Attendance Start Date cannot be greater than Attendance End Date.");
         verify(attendanceRepository, never()).save(any());
@@ -235,7 +238,7 @@ class AttendanceQueryServiceTest {
                 .thenReturn(Optional.of(new LeavePolicyResponse(4, 8, "HALF_DAY", "FULL_DAY", true, true, 2, "MONTHLY", true, false, true, true)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
-        service.upload("P1", "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1), "Year-2", anyFile());
+        service.upload("P1", null, "M1", null, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1), "Year-2", anyFile());
 
         assertThat(assignment.getRateYear()).isEqualTo("Year-2");
         verify(projectResourceRepository).save(assignment);
@@ -266,7 +269,7 @@ class AttendanceQueryServiceTest {
                 continue;
             }
             AttendanceStatus status = day == 8 ? AttendanceStatus.A : AttendanceStatus.P;
-            rows.add(new Attendance(resource, "P1", "M1", null, date, status));
+            rows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         eq(1L), eq(LocalDate.of(2026, 7, 1)), eq(LocalDate.of(2026, 7, 31))))
@@ -340,8 +343,8 @@ class AttendanceQueryServiceTest {
 
     @Test
     void employeeMonthlyCostMatchesWorkedExample() {
-        // July 2026: 31 days, 8 weekend days -> 23 working days, no holiday.
-        // 22 present, 1 absent. Rate card Year-3 = 88,200 -> cost = 88200 * 22/23 = 84365.22.
+        // July 2026: 31 calendar days. 22 present, 1 absent (no leave policy → 1 unpaid day).
+        // cost = round2(88200 × 30/31) = 85354.84.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
@@ -364,7 +367,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = !markedAbsent ? AttendanceStatus.A : AttendanceStatus.P;
             markedAbsent = true;
-            rows.add(new Attendance(resource, "P1", "M1", null, date, status));
+            rows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
@@ -374,9 +377,11 @@ class AttendanceQueryServiceTest {
 
         assertThat(cost.workingDays()).isEqualTo(23);
         assertThat(cost.presentDays()).isEqualTo(22.0);
+        assertThat(cost.calendarDays()).isEqualTo(31);
+        assertThat(cost.unpaidLeaveDays()).isEqualTo(1.0);
         assertThat(cost.rateYear()).isEqualTo("Year-3");
         assertThat(cost.monthlyRate()).isEqualTo(88200.0);
-        assertThat(cost.cost()).isEqualTo(84365.22);
+        assertThat(cost.cost()).isEqualTo(85354.84);
     }
 
     @Test
@@ -401,7 +406,10 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void quarterlyCostReportSumsThreeMonthsComputedSeparately() {
+    void quarterlyCostReportUsesCalendarDaysAndQuarterlySettlement() {
+        // Q3 2026 (Jul=31 + Aug=31 + Sep=30 = 92 calendar days). No absence records →
+        // quarterly resolver sees 0 absent dates → totalUnpaidDays=0 → full planned cost.
+        // Planned cost = 88200 × 3 = 264600; totalCost = 264600.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
@@ -421,9 +429,11 @@ class AttendanceQueryServiceTest {
         assertThat(report.resources()).hasSize(1);
         ResourceCostSummary summary = report.resources().get(0);
         assertThat(summary.period()).isEqualTo("Q3 2026");
+        assertThat(summary.calendarDays()).isEqualTo(92);
+        assertThat(summary.plannedPeriodCost()).isEqualTo(264600.0);
+        assertThat(summary.unpaidLeaveDays()).isEqualTo(0.0);
         assertThat(summary.monthlyBreakdown()).hasSize(3);
-        // No attendance rows -> 0 present days every month -> total cost 0.
-        assertThat(summary.totalCost()).isZero();
+        assertThat(summary.totalCost()).isEqualTo(264600.0);
     }
 
     @Test
@@ -434,10 +444,8 @@ class AttendanceQueryServiceTest {
 
     @Test
     void monthlyCostReflectsAttendanceOnlyRelaxationIsSettledQuarterly() {
-        // July 2026: 23 working days, 3 absent (20 present). Relaxation is a quarterly
-        // settlement and does NOT appear in the monthly cost.
-        // effectivePaidDays = 20 (no paid-leave allowance, no relaxation added here).
-        // cost = 88200 * 20/23 = 76695.65.
+        // July 2026: 31 calendar days, 3 absent (no leave policy → 3 unpaid days).
+        // cost = round2(88200 × 28/31) = 79664.52. Relaxation is quarterly, not monthly.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
@@ -460,7 +468,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = absentMarked < 3 ? AttendanceStatus.A : AttendanceStatus.P;
             absentMarked++;
-            rows.add(new Attendance(resource, "P1", "M1", null, date, status));
+            rows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
@@ -470,14 +478,15 @@ class AttendanceQueryServiceTest {
 
         assertThat(cost.workingDays()).isEqualTo(23);
         assertThat(cost.presentDays()).isEqualTo(20.0);
-        assertThat(cost.cost()).isEqualTo(76695.65);
+        assertThat(cost.calendarDays()).isEqualTo(31);
+        assertThat(cost.unpaidLeaveDays()).isEqualTo(3.0);
+        assertThat(cost.cost()).isEqualTo(79664.52);
     }
 
     @Test
     void monthlyCostForAugustReflectsAttendanceOnlyNoRelaxation() {
-        // August 2026: 21 working days, 2 absent (19 present). Relaxation is a quarterly
-        // settlement and is NOT added to the monthly cost here.
-        // effectivePaidDays = 19. cost = 88200 * 19/21 = 79800.0.
+        // August 2026: 31 calendar days, 2 absent (no leave policy → 2 unpaid days).
+        // cost = round2(88200 × 29/31) = 82509.68. Relaxation is quarterly, not monthly.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
@@ -500,7 +509,7 @@ class AttendanceQueryServiceTest {
             }
             AttendanceStatus status = augustAbsentMarked < 2 ? AttendanceStatus.A : AttendanceStatus.P;
             augustAbsentMarked++;
-            augustRows.add(new Attendance(resource, "P1", "M1", null, date, status));
+            augustRows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         1L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
@@ -510,7 +519,9 @@ class AttendanceQueryServiceTest {
 
         assertThat(cost.workingDays()).isEqualTo(21);
         assertThat(cost.presentDays()).isEqualTo(19.0);
-        assertThat(cost.cost()).isEqualTo(79800.0);
+        assertThat(cost.calendarDays()).isEqualTo(31);
+        assertThat(cost.unpaidLeaveDays()).isEqualTo(2.0);
+        assertThat(cost.cost()).isEqualTo(82509.68);
     }
 
     // ------------------------------------------------------------------
@@ -524,13 +535,13 @@ class AttendanceQueryServiceTest {
         resource.setName("Resource A");
         setId(resource, 1L);
         List<Attendance> rows = List.of(
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 5, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 5, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 5, 3), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 6, 14), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 6, 17), AttendanceStatus.A));
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 5, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 5, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 5, 3), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 6, 14), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 6, 17), AttendanceStatus.A));
         when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
                 .thenReturn(rows);
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
@@ -560,13 +571,13 @@ class AttendanceQueryServiceTest {
         resource.setName("Resource A");
         setId(resource, 1L);
         List<Attendance> q2Rows = List.of(
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 3), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 4, 4), AttendanceStatus.A));
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 1), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 2), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 3), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 4), AttendanceStatus.A));
         List<Attendance> q1Rows = List.of(
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 1, 8), AttendanceStatus.A),
-                new Attendance(resource, "P1", "M1", null, LocalDate.of(2024, 1, 9), AttendanceStatus.A));
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 1, 8), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 1, 9), AttendanceStatus.A));
         when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
                 .thenReturn(q2Rows);
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(

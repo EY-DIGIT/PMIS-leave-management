@@ -159,9 +159,11 @@ class QuarterLeavePolicyTest {
         assertThat(calc.paidLeaveDays()).isEqualTo(3.0);
         assertThat(calc.unpaidLeaveDays()).isZero();
         assertThat(calc.lapsedLeaveDays()).isEqualTo(3.0); // 6 - 3 = 3 lapsed
+        // paidLeaveDates contains only full-absent days; half-days are tracked by the caller via
+        // halfDayDates to keep the three date lists mutually exclusive.
         assertThat(calc.paidLeaveDates()).containsExactlyInAnyOrder(
-                LocalDate.of(2024, 4, 1), LocalDate.of(2024, 4, 2),
-                LocalDate.of(2024, 4, 3), LocalDate.of(2024, 4, 4));
+                LocalDate.of(2024, 4, 1), LocalDate.of(2024, 4, 2));
+        assertThat(calc.unpaidLeaveDates()).isEmpty();
     }
 
     @Test
