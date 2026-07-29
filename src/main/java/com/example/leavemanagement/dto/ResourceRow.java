@@ -16,7 +16,9 @@ import java.time.LocalDate;
  * @param lastDayOfWorking Last Day of Working, null if still active
  * @param category         RFP / CCN / ASG
  * @param categoryDetails  CCN / ASG details (e.g. "CCN001", "ASG1", "NA")
- * @param active           derived: true when lastDayOfWorking is blank
+ * @param active             derived: true when lastDayOfWorking is blank
+ * @param replacedByResId    optional Attendance ID of the resource taking over this designation
+ *                           after this resource's Last Day of Working
  */
 public record ResourceRow(
         String resId,
@@ -27,4 +29,5 @@ public record ResourceRow(
         LocalDate lastDayOfWorking,
         String category,
         String categoryDetails,
-        boolean active) {}
+        boolean active,
+        String replacedByResId) {}

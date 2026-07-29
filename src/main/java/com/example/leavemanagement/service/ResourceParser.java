@@ -27,6 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
  *   <li>A — Attendance ID, B — Employee Name, C — Role as per Contract, D — Location
  *   <li>E — Date of Joining, F — Last Day of Working (optional)
  *   <li>G — Category (RFP/CCN/ASG), H — CCN/ASG Details
+ *   <li>I — Replaced By Resource ID (optional; the Attendance ID of the incoming replacement)
  * </ul>
  *
  * <p>Year-1..Year-7 rate cards are no longer in the resource Excel — they are resolved from the
@@ -44,8 +45,9 @@ public class ResourceParser {
     private static final int COL_LOCATION = 3;
     private static final int COL_DATE_OF_JOINING = 4;
     private static final int COL_LAST_DAY_OF_WORKING = 5;
-    private static final int COL_CATEGORY = 6;         // G
-    private static final int COL_CATEGORY_DETAILS = 7; // H
+    private static final int COL_CATEGORY = 6;           // G
+    private static final int COL_CATEGORY_DETAILS = 7;   // H
+    private static final int COL_REPLACED_BY_RES_ID = 8; // I
 
     private final DataFormatter formatter = new DataFormatter();
 
@@ -74,6 +76,7 @@ public class ResourceParser {
                 int humanRow = row.getRowNum() + 1;
                 LocalDate lastDayOfWorking = readDate(
                         row.getCell(COL_LAST_DAY_OF_WORKING), evaluator, humanRow, "Last Day of Working", false);
+                String replacedByResId = text(row.getCell(COL_REPLACED_BY_RES_ID), evaluator);
                 rows.add(new ResourceRow(
                         text(row.getCell(COL_RES_ID), evaluator),
                         readName(row.getCell(COL_NAME), evaluator, humanRow),
@@ -83,7 +86,8 @@ public class ResourceParser {
                         lastDayOfWorking,
                         text(row.getCell(COL_CATEGORY), evaluator),
                         text(row.getCell(COL_CATEGORY_DETAILS), evaluator),
-                        lastDayOfWorking == null));
+                        lastDayOfWorking == null,
+                        replacedByResId.isBlank() ? null : replacedByResId));
             }
         } catch (IOException e) {
             throw new BadRequestException("Could not read the Excel file: " + e.getMessage());

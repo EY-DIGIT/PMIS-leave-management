@@ -90,7 +90,7 @@ class MasterResourceServiceTest {
         stubAllRolesValid();
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Crypto Lead", "Bengaluru", LocalDate.of(2026, 1, 1), null,
-                "RFP", "NA", true);
+                "RFP", "NA", true, null);
         when(parser.parse(any())).thenReturn(List.of(row));
         when(repository.findByResId("1")).thenReturn(Optional.empty());
         stubSaveAssignsId(1L);
@@ -133,7 +133,7 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Crypto Lead", "Delhi", LocalDate.of(2026, 1, 1), null,
-                "RFP", "NA", true);
+                "RFP", "NA", true, null);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         service.upload(anyFile(), "P1", "ORG1");
@@ -159,7 +159,7 @@ class MasterResourceServiceTest {
         // Role changes to Principal Architect effective 15-Jul-2026, same project.
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Principal Architect", "Bengaluru", LocalDate.of(2026, 7, 15), null,
-                "RFP", "NA", true);
+                "RFP", "NA", true, null);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         service.upload(anyFile(), "P1", "ORG1");
@@ -193,7 +193,7 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Lead", "Bengaluru", LocalDate.of(2026, 8, 1), null,
-                "RFP", "NA", true);
+                "RFP", "NA", true, null);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         // Still active on P1 -> uploading under P2 is rejected, not auto-reassigned.
@@ -220,7 +220,7 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Lead", "Bengaluru", LocalDate.of(2026, 8, 1), null,
-                "RFP", "NA", true);
+                "RFP", "NA", true, null);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         service.upload(anyFile(), "P2", "ORG1");
@@ -247,7 +247,7 @@ class MasterResourceServiceTest {
         // Resignation — Last Day of Working now set.
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Crypto Lead", "Bengaluru", LocalDate.of(2026, 1, 1),
-                LocalDate.of(2026, 8, 30), "RFP", "NA", false);
+                LocalDate.of(2026, 8, 30), "RFP", "NA", false, null);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         service.upload(anyFile(), "P1", "ORG1");
@@ -271,7 +271,7 @@ class MasterResourceServiceTest {
 
         ResourceRow row = new ResourceRow(
                 "1", "Sanju", "Security Architect", "Bengaluru", LocalDate.of(2026, 10, 15), null,
-                "RFP", "NA", true);
+                "RFP", "NA", true, null);
         when(parser.parse(any())).thenReturn(List.of(row));
 
         service.upload(anyFile(), "P1", "ORG1");

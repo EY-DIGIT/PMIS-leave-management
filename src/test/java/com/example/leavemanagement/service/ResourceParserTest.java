@@ -139,6 +139,43 @@ class ResourceParserTest {
         }
     }
 
+    @Test
+    void parsesReplacedByResIdColumn() {
+        try (XSSFWorkbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Resources");
+            sheet.createRow(0).createCell(0).setCellValue("Attendance ID"); // header
+
+            // R101 leaves and is replaced by R205
+            Row r1 = sheet.createRow(1);
+            r1.createCell(0).setCellValue("R101");
+            r1.createCell(1).setCellValue("Amit Kumar");
+            r1.createCell(2).setCellValue("Program Director");
+            r1.createCell(3).setCellValue("Delhi");
+            r1.createCell(4).setCellValue("2026-01-01");
+            r1.createCell(5).setCellValue("2029-01-19");
+            r1.createCell(8).setCellValue("R205"); // Replaced By Resource ID
+
+            // R205 is the incoming replacement — no replacedBy
+            Row r2 = sheet.createRow(2);
+            r2.createCell(0).setCellValue("R205");
+            r2.createCell(1).setCellValue("Rahul Singh");
+            r2.createCell(2).setCellValue("Program Director");
+            r2.createCell(3).setCellValue("Delhi");
+            r2.createCell(4).setCellValue("2029-01-20");
+            // column 5 blank — still active; column 8 blank — no replacement
+
+            List<ResourceRow> rows = parser.parse(toFile(wb));
+
+            assertThat(rows).hasSize(2);
+            assertThat(rows.get(0).replacedByResId()).isEqualTo("R205");
+            assertThat(rows.get(0).active()).isFalse();
+            assertThat(rows.get(1).replacedByResId()).isNull();
+            assertThat(rows.get(1).active()).isTrue();
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
     private MockMultipartFile toFile(Workbook wb) throws Exception {
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             wb.write(out);

@@ -14,10 +14,12 @@ import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
@@ -82,6 +84,7 @@ public class MasterResourceService {
     public ResourceUploadResult upload(MultipartFile file, String projectId, String organisationId) {
         List<ResourceRow> rows = parser.parse(file);
         validateRoles(rows, projectId, organisationId);
+        validateReplacements(rows, projectId);
         int stored = 0;
         for (ResourceRow row : rows) {
             MasterResource resource = repository
@@ -105,6 +108,81 @@ public class MasterResourceService {
                 .collect(Collectors.toList());
         if (!errors.isEmpty()) {
             throw new BadRequestException(String.join("\n", errors));
+        }
+    }
+
+    private void validateReplacements(List<ResourceRow> rows, String projectId) {
+        Map<String, ResourceRow> rowByResId = rows.stream()
+                .collect(Collectors.toMap(ResourceRow::resId, r -> r));
+
+        // Rule: no two outgoing resources may name the same replacement (one-to-one).
+        rows.stream()
+                .filter(r -> r.replacedByResId() != null)
+                .collect(Collectors.groupingBy(ResourceRow::replacedByResId, Collectors.counting()))
+                .entrySet().stream()
+                .filter(e -> e.getValue() > 1)
+                .findFirst()
+                .ifPresent(e -> {
+                    throw new BadRequestException(
+                            "Resource " + e.getKey() + " is listed as a replacement for more than one resource."
+                                    + " A resource can replace only one previous resource.");
+                });
+
+        for (ResourceRow row : rows) {
+            String replacementId = row.replacedByResId();
+            if (replacementId == null) continue;
+
+            if (replacementId.equals(row.resId())) {
+                throw new BadRequestException("Resource " + row.resId() + " cannot replace itself.");
+            }
+
+            // Resolve role and start date of the replacement from batch or DB.
+            String replacementRole;
+            LocalDate replacementStartDate;
+            ResourceRow replacementRow = rowByResId.get(replacementId);
+            if (replacementRow != null) {
+                replacementRole = replacementRow.role();
+                replacementStartDate = replacementRow.dateOfJoining();
+            } else {
+                ProjectResource existing = projectResourceRepository
+                        .findByResource_ResIdAndProjectIdAndActiveTrue(replacementId, projectId)
+                        .orElseThrow(() -> new BadRequestException(
+                                "Replacement resource '" + replacementId + "' (listed for resource '"
+                                        + row.resId() + "') was not found in the upload or as an active"
+                                        + " assignment on project " + projectId + "."));
+                replacementRole = existing.getRole();
+                replacementStartDate = existing.getAssignmentStartDate();
+            }
+
+            // Rule: same designation.
+            if (!row.role().equals(replacementRole)) {
+                throw new BadRequestException(
+                        "Resource '" + row.resId() + "' (role: " + row.role() + ") cannot be replaced by '"
+                                + replacementId + "' (role: " + replacementRole
+                                + "). The replacement must have the same designation.");
+            }
+
+            // Rule: replacement start date must be on or after the outgoing resource's end date.
+            if (row.lastDayOfWorking() != null && replacementStartDate != null
+                    && replacementStartDate.isBefore(row.lastDayOfWorking())) {
+                throw new BadRequestException(
+                        "Replacement resource '" + replacementId + "' start date (" + replacementStartDate
+                                + ") must be on or after '" + row.resId() + "' end date ("
+                                + row.lastDayOfWorking() + ").");
+            }
+
+            // Rule: no circular chain (A → B → … → A).
+            Set<String> chain = new LinkedHashSet<>();
+            chain.add(row.resId());
+            String cursor = replacementId;
+            while (cursor != null) {
+                if (!chain.add(cursor)) {
+                    throw new BadRequestException(
+                            "Circular replacement detected: " + String.join(" → ", chain) + " → " + cursor);
+                }
+                ResourceRow next = rowByResId.get(cursor);
+                cursor = next != null ? next.replacedByResId() : null;
+            }
         }
     }
 
@@ -138,19 +216,21 @@ public class MasterResourceService {
         }
 
         if (active.isPresent() && Objects.equals(active.get().getRole(), row.role()) && row.active()) {
-            // Same project, same role: refresh the rate card and organisationId in place.
+            // Same project, same role: refresh the rate card, organisationId, and replacement in place.
             ProjectResource assignment = active.get();
             assignment.setOrganisationId(organisationId);
             assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
+            assignment.setReplacedByResId(row.replacedByResId());
             projectResourceRepository.save(assignment);
             return;
         }
 
         if (active.isPresent() && !row.active()) {
-            // Resignation from the active assignment — close it, open nothing new.
+            // Resignation/exit — close the assignment and record the replacement if provided.
             ProjectResource assignment = active.get();
             assignment.setActive(false);
             assignment.setAssignmentEndDate(row.lastDayOfWorking());
+            assignment.setReplacedByResId(row.replacedByResId());
             projectResourceRepository.save(assignment);
             return;
         }
@@ -360,6 +440,7 @@ public class MasterResourceService {
                 a != null ? a.getRateYear() : null,
                 a != null && a.isActive(),
                 a != null ? a.getAssignmentStartDate() : null,
-                a != null ? a.getAssignmentEndDate() : null);
+                a != null ? a.getAssignmentEndDate() : null,
+                a != null ? a.getReplacedByResId() : null);
     }
 }

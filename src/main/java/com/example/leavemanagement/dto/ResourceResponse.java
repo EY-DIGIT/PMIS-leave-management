@@ -25,4 +25,5 @@ public record ResourceResponse(
         String rateYear,
         boolean active,
         LocalDate assignmentStartDate,
-        LocalDate assignmentEndDate) {}
+        LocalDate assignmentEndDate,
+        String replacedByResId) {}

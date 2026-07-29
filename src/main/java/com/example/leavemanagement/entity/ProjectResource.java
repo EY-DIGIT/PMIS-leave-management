@@ -55,6 +55,10 @@ public class ProjectResource {
     @Column(name = "organisation_id", length = 100)
     private String organisationId;
 
+    /** resId of the resource replacing this one at designation handover; null while still active. */
+    @Column(name = "replaced_by_res_id", length = 50)
+    private String replacedByResId;
+
     @Column(name = "role", length = 200)
     private String role;
 
