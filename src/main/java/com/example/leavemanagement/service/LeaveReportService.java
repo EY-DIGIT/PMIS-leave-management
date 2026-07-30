@@ -307,15 +307,27 @@ public class LeaveReportService {
             throw new BadRequestException("quarter must be between 1 and 4");
         }
 
-        List<Integer> months = List.of(quarter * 3 - 2, quarter * 3 - 1, quarter * 3);
-        LocalDate quarterStart = LocalDate.of(year, months.get(0), 1);
-        LocalDate quarterEnd = LocalDate.of(year, months.get(2), 1)
-                .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
+        Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
+
+        // Resolve assignment first so we can compute project-aligned quarter boundaries.
+        ProjectResource assignment = resource
+                .flatMap(r -> projectResourceRepository.findByResourceIdAndActiveTrue(r.getId()))
+                .orElse(null);
+
+        String projectId = assignment != null ? assignment.getProjectId() : null;
+        if (filterProjectId != null && !filterProjectId.isBlank() && !filterProjectId.equals(projectId)) {
+            throw new NotFoundException(
+                    "No leave record for attendanceId " + attendanceId + " under project " + filterProjectId);
+        }
+
+        String organisationId = assignment != null ? assignment.getOrganisationId() : null;
+        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, organisationId);
+        LocalDate quarterStart = quarterLeaveResolver.quarterStart(year, quarter, cycleDay);
+        LocalDate quarterEnd = quarterLeaveResolver.quarterEnd(year, quarter, cycleDay);
 
         periodValidator.validate(quarterStart, quarterEnd, filterProjectId, attendanceId,
                 "Q" + quarter + " " + year);
 
-        Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
         List<Attendance> attendanceRows = resource
                 .map(r -> attendanceRepository.findByResourceIdAndAttendanceDateBetween(
                         r.getId(), quarterStart, quarterEnd))
@@ -338,15 +350,6 @@ public class LeaveReportService {
             if (row.getActivityId()  != null) activityId  = row.getActivityId();
         }
 
-        ProjectResource assignment = resource
-                .flatMap(r -> projectResourceRepository.findByResourceIdAndActiveTrue(r.getId()))
-                .orElse(null);
-
-        String projectId = assignment != null ? assignment.getProjectId() : null;
-        if (filterProjectId != null && !filterProjectId.isBlank() && !filterProjectId.equals(projectId)) {
-            throw new NotFoundException(
-                    "No leave record for attendanceId " + attendanceId + " under project " + filterProjectId);
-        }
         String projectName = null;
 
         LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
@@ -356,7 +359,7 @@ public class LeaveReportService {
 
         Long resourceId = resource.map(MasterResource::getId).orElse(null);
         QuarterLeaveCalculation calc =
-                quarterLeaveResolver.calculate(resourceId, projectId, joiningDate, year, quarter,
+                quarterLeaveResolver.calculate(resourceId, projectId, organisationId, joiningDate, year, quarter,
                         absentDates, halfDayDates);
 
         String designation = assignment != null ? assignment.getRole() : null;

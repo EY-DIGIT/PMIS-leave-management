@@ -63,8 +63,8 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
 //               "false",     // sundayWorking
 //               true,        // attendanceCaptured
 //               true,        // sandwichLeaveApplied
-//               2,           // leavesPerFrequencyCount
-//               "MONTHLY",   // leavesFrequency
+//               6,           // leavesPerFrequencyCount
+//               "QUARTERLY",   // leavesFrequency
 //               true,        // proratedLeavesApplied
 //               false,       // carryForwardAllowed
 //               true,        // leaveLapseAtQuarterEnd

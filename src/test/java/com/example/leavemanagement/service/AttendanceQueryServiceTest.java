@@ -75,6 +75,9 @@ class AttendanceQueryServiceTest {
     @Mock
     private com.example.leavemanagement.repository.ProjectYearMappingRepository yearMappingRepository;
 
+    @Mock
+    private com.example.leavemanagement.repository.ProjectConfigRepository projectConfigRepository;
+
     // Real engine — the quarterly-settlement path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -83,7 +86,7 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, holidayRepository, leavePolicyClient, policy);
+                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository);
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,

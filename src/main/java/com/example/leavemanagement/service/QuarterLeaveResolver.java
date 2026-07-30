@@ -7,6 +7,7 @@ import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.repository.AttendanceRepository;
+import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.LocalDate;
 import java.util.List;
@@ -32,16 +33,49 @@ public class QuarterLeaveResolver {
     private final PublicHolidayRepository holidayRepository;
     private final LeavePolicyClient leavePolicyClient;
     private final QuarterLeavePolicy policy;
+    private final ProjectConfigRepository projectConfigRepository;
 
     public QuarterLeaveResolver(
             AttendanceRepository attendanceRepository,
             PublicHolidayRepository holidayRepository,
             LeavePolicyClient leavePolicyClient,
-            QuarterLeavePolicy policy) {
+            QuarterLeavePolicy policy,
+            ProjectConfigRepository projectConfigRepository) {
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
         this.leavePolicyClient = leavePolicyClient;
         this.policy = policy;
+        this.projectConfigRepository = projectConfigRepository;
+    }
+
+    /**
+     * Returns the configured quarter cycle start day (1–28) for the given project/organisation.
+     * Falls back to 1 when no config exists, giving standard calendar quarters (Jan 1, Apr 1, etc.).
+     */
+    public int resolveCycleDay(String projectId, String organisationId) {
+        if (projectId == null || organisationId == null) return 1;
+        return projectConfigRepository
+                .findByProjectIdAndOrganisationId(projectId, organisationId)
+                .map(c -> c.getQuarterCycleDay())
+                .orElse(1);
+    }
+
+    /**
+     * Quarter start date. Quarters are always calendar-aligned (Q1=Jan, Q2=Apr, Q3=Jul, Q4=Oct)
+     * but begin on {@code cycleDay} of the month rather than the 1st.
+     * Example: cycleDay=7, quarter=2, year=2024 → Apr 7, 2024.
+     */
+    public LocalDate quarterStart(int year, int quarter, int cycleDay) {
+        int baseMonth = (quarter - 1) * 3 + 1;
+        return LocalDate.of(year, baseMonth, cycleDay);
+    }
+
+    /**
+     * Quarter end date (inclusive) — exactly 3 months after the quarter start, minus 1 day.
+     * Example: cycleDay=7, Q2 2024 start=Apr 7 → end=Jul 6.
+     */
+    public LocalDate quarterEnd(int year, int quarter, int cycleDay) {
+        return quarterStart(year, quarter, cycleDay).plusMonths(3).minusDays(1);
     }
 
     /**
@@ -58,13 +92,15 @@ public class QuarterLeaveResolver {
     public QuarterLeaveCalculation calculate(
             Long resourceId,
             String projectId,
+            String organisationId,
             LocalDate joiningDate,
             int year,
             int quarter,
             Set<LocalDate> absentDates,
             Set<LocalDate> halfDayDates) {
-        LocalDate quarterStart = quarterStart(year, quarter);
-        LocalDate quarterEnd = quarterEnd(year, quarter);
+        int cycleDay = resolveCycleDay(projectId, organisationId);
+        LocalDate quarterStart = quarterStart(year, quarter, cycleDay);
+        LocalDate quarterEnd = quarterEnd(year, quarter, cycleDay);
         Set<LocalDate> holidays = holidaysBetween(quarterStart, quarterEnd);
 
         Optional<LeavePolicyResponse> leavePolicy =
@@ -73,7 +109,7 @@ public class QuarterLeaveResolver {
         boolean carryForwardAllowed =
                 leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
         int carriedForwardDays = (resourceId != null && carryForwardAllowed)
-                ? resolveCarriedForwardDays(resourceId, year, quarter, joiningDate, maxLeaves)
+                ? resolveCarriedForwardDays(resourceId, year, quarter, joiningDate, maxLeaves, cycleDay)
                 : 0;
 
         return policy.compute(
@@ -113,11 +149,12 @@ public class QuarterLeaveResolver {
      * computed.
      */
     private int resolveCarriedForwardDays(
-            Long resourceId, int year, int quarter, LocalDate joiningDate, int maxLeaves) {
+            Long resourceId, int year, int quarter, LocalDate joiningDate, int maxLeaves,
+            int cycleDay) {
         int prevQuarter = quarter == 1 ? 4 : quarter - 1;
         int prevYear = quarter == 1 ? year - 1 : year;
-        LocalDate prevStart = quarterStart(prevYear, prevQuarter);
-        LocalDate prevEnd = quarterEnd(prevYear, prevQuarter);
+        LocalDate prevStart = quarterStart(prevYear, prevQuarter, cycleDay);
+        LocalDate prevEnd = quarterEnd(prevYear, prevQuarter, cycleDay);
         if (joiningDate != null && joiningDate.isAfter(prevEnd)) {
             return 0;
         }
@@ -150,12 +187,5 @@ public class QuarterLeaveResolver {
                 .collect(Collectors.toSet());
     }
 
-    private LocalDate quarterStart(int year, int quarter) {
-        return LocalDate.of(year, quarter * 3 - 2, 1);
-    }
 
-    private LocalDate quarterEnd(int year, int quarter) {
-        LocalDate firstOfLastMonth = LocalDate.of(year, quarter * 3, 1);
-        return firstOfLastMonth.withDayOfMonth(firstOfLastMonth.lengthOfMonth());
-    }
 }

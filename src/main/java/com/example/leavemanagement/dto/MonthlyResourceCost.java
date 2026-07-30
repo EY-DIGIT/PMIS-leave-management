@@ -1,14 +1,18 @@
 package com.example.leavemanagement.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import java.time.LocalDate;
+
 /**
- * One resource's cost for one calendar month, using a calendar-days-based formula.
+ * One resource's cost for one billing period (cycle-aligned month), using a calendar-days formula.
  *
  * <p>Cost = {@code monthlyRate × paidCalendarDays / calendarDays}, where
  * {@code paidCalendarDays = calendarDays − unpaidLeaveDays}. Only unpaid leave reduces cost;
  * weekends and public holidays are already priced into the monthly rate.
  *
  * <ul>
- *   <li>{@code calendarDays} — total calendar days in the month (28–31).
+ *   <li>{@code fromDate} / {@code toDate} — the billing period start/end (cycle-day aligned).
+ *   <li>{@code calendarDays} — total calendar days in the period.
  *   <li>{@code unpaidLeaveDays} — effective absences beyond the monthly leave entitlement.
  *   <li>{@code paidCalendarDays} — {@code calendarDays − unpaidLeaveDays}.
  *   <li>{@code perDayRate} — {@code monthlyRate / calendarDays}.
@@ -27,6 +31,8 @@ public record MonthlyResourceCost(
         String activityId,
         String rateYear,
         String period,
+        @JsonFormat(pattern = "dd-MM-yyyy") LocalDate fromDate,
+        @JsonFormat(pattern = "dd-MM-yyyy") LocalDate toDate,
         // Attendance breakdown (informational)
         int workingDays,
         double presentDays,

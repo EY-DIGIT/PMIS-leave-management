@@ -20,6 +20,7 @@ import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
+import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectYearMappingRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.DayOfWeek;
@@ -64,6 +65,9 @@ class LeaveReportServiceTest {
     @Mock
     private ProjectYearMappingRepository yearMappingRepository;
 
+    @Mock
+    private ProjectConfigRepository projectConfigRepository;
+
     // Real engine, same as AttendanceQueryServiceTest.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -72,7 +76,7 @@ class LeaveReportServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, publicHolidayRepository, leavePolicyClient, policy);
+                attendanceRepository, publicHolidayRepository, leavePolicyClient, policy, projectConfigRepository);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
                 attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver, periodValidator,
