@@ -86,7 +86,7 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository);
+                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository, projectResourceRepository);
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
