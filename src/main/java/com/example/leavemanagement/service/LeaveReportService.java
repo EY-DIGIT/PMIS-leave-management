@@ -131,10 +131,12 @@ public class LeaveReportService {
         EmployeeLeaveDetail raw =
                 rawEmployeeDetail(request.resourceId(), request.year(), request.quarter(), request.projectId());
 
-        // Validate: every requested date must be an actual unpaid leave date.
-        Set<LocalDate> unpaidSet = new HashSet<>(raw.unpaidLeaveDates());
+        // Validate: every requested date must be an eligible unpaid date (full, half-day, or sandwich).
+        Set<LocalDate> eligibleSet = new HashSet<>(raw.unpaidLeaveDates());
+        eligibleSet.addAll(raw.unpaidHalfDayDates());
+        eligibleSet.addAll(raw.sandwichDates());
         for (LocalDate date : requestedDates) {
-            if (!unpaidSet.contains(date)) {
+            if (!eligibleSet.contains(date)) {
                 throw new BadRequestException(
                         "Date " + date + " is not an unpaid leave date for this resource in Q"
                                 + request.quarter() + " " + request.year());
@@ -233,7 +235,12 @@ public class LeaveReportService {
         List<LocalDate> eligible = allUnpaidDates.stream().filter(d -> !approvedSet.contains(d)).toList();
 
         return new RelaxationEligibilityResponse(
-                resourceId, projectId, year, quarter, allUnpaidDates, approvedDates, eligible, approvedCost);
+                resourceId, projectId, year, quarter,
+                raw.unpaidLeaveDates(),
+                raw.unpaidHalfDayDates(),
+                raw.sandwichDates(),
+                allUnpaidDates,
+                approvedDates, eligible, approvedCost);
     }
 
     /** Returns the stored evidence attachment for a relaxation record, or throws if none exists. */

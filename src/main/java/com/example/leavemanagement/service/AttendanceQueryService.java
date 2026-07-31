@@ -449,9 +449,14 @@ public class AttendanceQueryService {
 
         double presentDays = presentDaysRaw + halfDays * 0.5;
 
+        int fullPeriodDays = Math.max(1, (int) (end.toEpochDay() - start.toEpochDay()) + 1);
+        int effectivePeriodDays = Math.max(0, (int) (effectiveEnd.toEpochDay() - effectiveStart.toEpochDay()) + 1);
+        int proRatedLeaveLimit = leaveLimit > 0
+                ? Math.max(0, Math.round((float) leaveLimit * effectivePeriodDays / fullPeriodDays))
+                : 0;
         double effectiveAbsent = absentDays + halfDays * 0.5;
-        double paidLeaveDays   = Math.min(effectiveAbsent, leaveLimit);
-        double unpaidLeaveDays = Math.max(0.0, effectiveAbsent - leaveLimit);
+        double paidLeaveDays   = Math.min(effectiveAbsent, proRatedLeaveLimit);
+        double unpaidLeaveDays = Math.max(0.0, effectiveAbsent - proRatedLeaveLimit);
 
         double attendancePercentage = workingDays > 0
                 ? Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0
