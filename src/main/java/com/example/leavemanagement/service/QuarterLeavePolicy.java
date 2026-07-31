@@ -98,7 +98,7 @@ public class QuarterLeavePolicy {
 
         if (effectiveStart.isAfter(quarterEnd)) {
             return new QuarterLeaveCalculation(0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
-                    List.of(), List.of(), List.of());
+                    List.of(), List.of(), List.of(), List.of());
         }
 
         int basePermissible =
@@ -126,39 +126,31 @@ public class QuarterLeavePolicy {
         double remaining = permissible;
         double leaveTaken = 0.0, paidAccum = 0.0, unpaidAccum = 0.0;
         List<LocalDate> paidDates = new ArrayList<>(), unpaidDates = new ArrayList<>();
-        Set<LocalDate> unpaidFullAbsentSet = new HashSet<>(); // only full-day unpaid (sandwich trigger)
+        List<LocalDate> unpaidHalfDayDates = new ArrayList<>();
+        Set<LocalDate> unpaidFullAbsentSet = new HashSet<>();
 
         for (WeightedDay wd : allDays) {
             leaveTaken += wd.weight();
             if (remaining >= wd.weight()) {
-                // Fully covered by quota.
                 remaining -= wd.weight();
                 paidAccum += wd.weight();
-                // Only full-absent days go into paidDates; half-days are tracked via the
-                // caller's halfDayDates list to keep the three date lists mutually exclusive.
                 if (wd.weight() == 1.0) {
                     paidDates.add(wd.date());
                 }
             } else if (remaining > 0.0) {
-                // Boundary: quota runs out mid full-absent day (weight is always 1.0 here because
-                // remaining is always a multiple of 0.5 and half-days are exactly 0.5 — they
-                // never partially straddle the quota boundary).
                 paidAccum += remaining;
                 unpaidAccum += wd.weight() - remaining;
                 remaining = 0.0;
-                // Place the boundary date in unpaidDates only (it has an unpaid component) so
-                // each date appears in at most one of paidDates / unpaidDates.
                 unpaidDates.add(wd.date());
-                unpaidFullAbsentSet.add(wd.date()); // has unpaid component → sandwich eligible
+                unpaidFullAbsentSet.add(wd.date());
             } else {
-                // Entirely unpaid.
                 unpaidAccum += wd.weight();
                 if (wd.weight() == 1.0) {
                     unpaidDates.add(wd.date());
-                    unpaidFullAbsentSet.add(wd.date()); // full absent day → sandwich eligible
+                    unpaidFullAbsentSet.add(wd.date());
+                } else {
+                    unpaidHalfDayDates.add(wd.date());
                 }
-                // Half-day dates: tracked via caller's halfDayDates only; they never trigger
-                // sandwich leave because the employee worked that day.
             }
         }
 
@@ -178,6 +170,7 @@ public class QuarterLeavePolicy {
                 lapsed,
                 List.copyOf(paidDates),
                 List.copyOf(unpaidDates),
+                List.copyOf(unpaidHalfDayDates),
                 sandwichDates);
     }
 

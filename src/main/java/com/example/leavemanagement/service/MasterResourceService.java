@@ -304,20 +304,19 @@ public class MasterResourceService {
             String emailId,
             String designationType,
             String projectId,
+            String organisationId,
             Boolean active,
             LocalDate joinedFrom,
             LocalDate joinedTo) {
         Specification<MasterResource> spec = buildSpecification(resId, name, emailId, joinedFrom, joinedTo);
         List<ResourceResponse> results = new ArrayList<>();
         for (MasterResource resource : repository.findAll(spec)) {
-            // Prefer the active assignment; fall back to the most recent inactive one so inactive
-            // resources are still visible when active=false or active=null.
             ProjectResource assignment =
                     projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()).orElseGet(() ->
                             projectResourceRepository
                                     .findByResourceIdOrderByAssignmentStartDateAsc(resource.getId())
                                     .stream()
-                                    .reduce((first, second) -> second) // last/most-recent
+                                    .reduce((first, second) -> second)
                                     .orElse(null));
             if (designationType != null
                     && !designationType.isBlank()
@@ -327,6 +326,11 @@ public class MasterResourceService {
             if (projectId != null
                     && !projectId.isBlank()
                     && (assignment == null || !projectId.equals(assignment.getProjectId()))) {
+                continue;
+            }
+            if (organisationId != null
+                    && !organisationId.isBlank()
+                    && (assignment == null || !organisationId.equals(assignment.getOrganisationId()))) {
                 continue;
             }
             if (active != null && active != (assignment != null && assignment.isActive())) {

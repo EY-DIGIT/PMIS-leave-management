@@ -96,13 +96,15 @@ public class MasterResourceController {
                     String designationType,
             @Parameter(description = "Exact project id — only resources assigned to this project")
                     @RequestParam(required = false) String projectId,
+            @Parameter(description = "Exact organisation id — only resources assigned to this organisation")
+                    @RequestParam(required = false) String organisationId,
             @Parameter(description = "Filter by active/inactive") @RequestParam(required = false) Boolean active,
             @Parameter(description = "date_of_joining >= this date")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate joinedFrom,
             @Parameter(description = "date_of_joining <= this date")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate joinedTo) {
         return masterResourceService.search(
-                resId, name, emailId, designationType, projectId, active, joinedFrom, joinedTo);
+                resId, name, emailId, designationType, projectId, organisationId, active, joinedFrom, joinedTo);
     }
 
     /**

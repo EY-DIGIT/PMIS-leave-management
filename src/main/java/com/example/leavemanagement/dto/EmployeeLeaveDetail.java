@@ -15,9 +15,9 @@ import java.util.List;
  * @param totalUnpaidDays unpaidLeave + sandwichDays (the payable deduction), after relaxation
  * @param lapsedLeaveDays permissible days left unused this quarter
  * @param halfDayDates calendar dates on which the resource was marked HD (half-day)
- * @param paidLeaveDates absent/half-day dates covered by the permissible leave quota
- * @param unpaidLeaveDates absent/half-day dates that exceeded the quota (partially-covered date
- *     appears in both lists)
+ * @param paidLeaveDates fully-absent dates covered by the permissible leave quota
+ * @param unpaidLeaveDates fully-absent dates that exceeded the quota
+ * @param unpaidHalfDayDates half-day dates whose 0.5 weight exceeded the remaining quota
  * @param sandwichDates non-working days (weekends/holidays) sandwiched between unpaid absences
  */
 public record EmployeeLeaveDetail(
@@ -45,4 +45,5 @@ public record EmployeeLeaveDetail(
         List<LocalDate> halfDayDates,
         List<LocalDate> paidLeaveDates,
         List<LocalDate> unpaidLeaveDates,
+        List<LocalDate> unpaidHalfDayDates,
         List<LocalDate> sandwichDates) {}

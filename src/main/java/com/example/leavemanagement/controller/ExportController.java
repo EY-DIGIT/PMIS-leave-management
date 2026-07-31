@@ -148,7 +148,7 @@ public class ExportController {
             @Parameter(description = "Project id (optional — omit for all projects)")
                     @RequestParam(required = false) String projectId) {
         List<ResourceResponse> resources =
-                masterResourceService.search(null, null, null, null, projectId, null, null, null);
+                masterResourceService.search(null, null, null, null, projectId, null, null, null, null);
         byte[] bytes = resourceExcelExporter.export(projectId, resources);
         String filename = projectId != null && !projectId.isBlank()
                 ? "resources_" + projectId + "_" + LocalDate.now() + ".xlsx"

@@ -24,9 +24,10 @@ import java.util.List;
  * @param totalUnpaidDays unpaidLeaveDays + sandwichDays (the payable deduction)
  * @param lapsedLeaveDays permissible days left unused this quarter — what the next quarter may
  *     carry in if carry-forward is allowed
- * @param paidLeaveDates the dates counted as paid leave (includes half-day dates within quota)
- * @param unpaidLeaveDates the dates counted as unpaid leave (includes half-day dates beyond quota)
- * @param sandwichDates the weekend/holiday dates pulled in by the sandwich rule
+ * @param paidLeaveDates fully-absent dates covered by the permissible leave quota
+ * @param unpaidLeaveDates fully-absent dates that exceeded the quota
+ * @param unpaidHalfDayDates half-day dates whose 0.5 weight exceeded the remaining quota
+ * @param sandwichDates non-working days (weekends/holidays) pulled in by the sandwich rule
  */
 public record QuarterLeaveCalculation(
         int permissibleLeave,
@@ -39,4 +40,5 @@ public record QuarterLeaveCalculation(
         double lapsedLeaveDays,
         List<LocalDate> paidLeaveDates,
         List<LocalDate> unpaidLeaveDates,
+        List<LocalDate> unpaidHalfDayDates,
         List<LocalDate> sandwichDates) {}

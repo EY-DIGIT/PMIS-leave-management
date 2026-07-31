@@ -218,7 +218,11 @@ public class LeaveReportService {
     public RelaxationEligibilityResponse eligibleRelaxationDates(
             String resourceId, String projectId, int year, int quarter) {
         EmployeeLeaveDetail raw = rawEmployeeDetail(resourceId, year, quarter, projectId);
-        List<LocalDate> unpaidDates = raw.unpaidLeaveDates();
+
+        List<LocalDate> allUnpaidDates = new ArrayList<>(raw.unpaidLeaveDates());
+        allUnpaidDates.addAll(raw.unpaidHalfDayDates());
+        allUnpaidDates.addAll(raw.sandwichDates());
+        allUnpaidDates.sort(java.util.Comparator.naturalOrder());
 
         Optional<LeaveRelaxation> existing = leaveRelaxationRepository
                 .findByResource_ResIdAndProjectIdAndYearAndQuarter(resourceId, projectId, year, quarter);
@@ -226,10 +230,10 @@ public class LeaveReportService {
         double approvedCost = existing.map(LeaveRelaxation::getRelaxationCost).orElse(0.0);
 
         Set<LocalDate> approvedSet = new HashSet<>(approvedDates);
-        List<LocalDate> eligible = unpaidDates.stream().filter(d -> !approvedSet.contains(d)).toList();
+        List<LocalDate> eligible = allUnpaidDates.stream().filter(d -> !approvedSet.contains(d)).toList();
 
         return new RelaxationEligibilityResponse(
-                resourceId, projectId, year, quarter, unpaidDates, approvedDates, eligible, approvedCost);
+                resourceId, projectId, year, quarter, allUnpaidDates, approvedDates, eligible, approvedCost);
     }
 
     /** Returns the stored evidence attachment for a relaxation record, or throws if none exists. */
@@ -287,6 +291,7 @@ public class LeaveReportService {
                 raw.halfDayDates(),
                 raw.paidLeaveDates(),
                 raw.unpaidLeaveDates(),
+                raw.unpaidHalfDayDates(),
                 raw.sandwichDates());
     }
 
@@ -382,13 +387,14 @@ public class LeaveReportService {
                 calc.leaveDaysTaken(),
                 calc.paidLeaveDays(),
                 calc.unpaidLeaveDays(),
-                0.0, // relaxationLeave: none applied yet — see applyRelaxation
+                0.0,
                 calc.sandwichDays(),
                 calc.totalUnpaidDays(),
                 calc.lapsedLeaveDays(),
                 sortedHalfDayDates,
                 calc.paidLeaveDates(),
                 calc.unpaidLeaveDates(),
+                calc.unpaidHalfDayDates(),
                 calc.sandwichDates());
     }
 }
