@@ -160,8 +160,11 @@ public class LeaveReportService {
             throw new BadRequestException("All selected dates have already been approved for relaxation");
         }
 
+        Set<LocalDate> halfDayUnpaidSet = new HashSet<>(raw.unpaidHalfDayDates());
+
         // Per-day cost: monthlyRate / calendar-days-in-that-month, rate year resolved per date
         // from project-year mapping (falls back to the static rateYear on the assignment).
+        // Half-day unpaid dates count as 0.5.
         ProjectResource assignment = projectResourceRepository
                 .findByResource_ResIdAndProjectIdAndActiveTrue(request.resourceId(), request.projectId())
                 .orElse(null);
@@ -175,7 +178,8 @@ public class LeaveReportService {
                         .orElse(assignment.getRateYear());
                 Double monthlyRate = rateYear != null ? assignment.getRateCardByYear().get(rateYear) : null;
                 if (monthlyRate != null) {
-                    newCost += monthlyRate / date.lengthOfMonth();
+                    double weight = halfDayUnpaidSet.contains(date) ? 0.5 : 1.0;
+                    newCost += (monthlyRate / date.lengthOfMonth()) * weight;
                 }
             }
         }
@@ -185,7 +189,9 @@ public class LeaveReportService {
         allDates.addAll(freshDates);
         allDates.sort(Comparator.naturalOrder());
 
-        double totalRelaxDays = allDates.size();
+        double totalRelaxDays = allDates.stream()
+                .mapToDouble(d -> halfDayUnpaidSet.contains(d) ? 0.5 : 1.0)
+                .sum();
         double totalRelaxCost = round2(relaxation.getRelaxationCost() + newCost);
 
         relaxation.setOriginalPaidLeave(raw.paidLeave());
@@ -321,9 +327,17 @@ public class LeaveReportService {
 
         Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
 
-        // Resolve assignment first so we can compute project-aligned quarter boundaries.
         ProjectResource assignment = resource
-                .flatMap(r -> projectResourceRepository.findByResourceIdAndActiveTrue(r.getId()))
+                .flatMap(r -> {
+                    Optional<ProjectResource> active =
+                            projectResourceRepository.findByResourceIdAndActiveTrue(r.getId());
+                    if (active.isPresent()) return active;
+                    List<ProjectResource> history =
+                            projectResourceRepository.findByResourceIdOrderByAssignmentStartDateAsc(r.getId());
+                    return history.isEmpty()
+                            ? Optional.empty()
+                            : Optional.of(history.get(history.size() - 1));
+                })
                 .orElse(null);
 
         String projectId = assignment != null ? assignment.getProjectId() : null;

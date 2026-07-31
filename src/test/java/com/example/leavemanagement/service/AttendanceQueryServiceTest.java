@@ -86,7 +86,7 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository, projectResourceRepository);
+                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository);
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
@@ -319,7 +319,7 @@ class AttendanceQueryServiceTest {
 
     @Test
     void quarterlyReportRequiresProjectIdOrResourceId() {
-        assertThatThrownBy(() -> service.quarterlyReport(null, null, 2026, 3))
+        assertThatThrownBy(() -> service.quarterlyReport(null, null, null, 2026, 3))
                 .isInstanceOf(BadRequestException.class);
     }
 
@@ -334,7 +334,7 @@ class AttendanceQueryServiceTest {
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
                 .thenReturn(List.of());
 
-        AttendanceReportResult report = service.quarterlyReport(null, "E1", 2026, 3);
+        AttendanceReportResult report = service.quarterlyReport(null, "E1", null, 2026, 3);
 
         assertThat(report.resources()).hasSize(1);
         assertThat(report.resources().get(0).period()).isEqualTo("Q3 2026");

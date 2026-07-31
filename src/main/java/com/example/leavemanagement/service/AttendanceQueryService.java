@@ -267,7 +267,7 @@ public class AttendanceQueryService {
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
         String label = start.format(MONTH_YEAR);
         periodValidator.validate(start, end, projectId, null, label);
-        return projectDashboard(projectId, start, end, label, 1);
+        return projectDashboard(projectId, null, start, end, label, 1);
     }
 
     /** One resource's summary for one month. */
@@ -288,7 +288,7 @@ public class AttendanceQueryService {
      * projectId} for the project dashboard (one summary per active resource).
      */
     @Transactional(readOnly = true)
-    public AttendanceReportResult quarterlyReport(String projectId, String resourceId, int year, int quarter) {
+    public AttendanceReportResult quarterlyReport(String projectId, String resourceId, String organisationId, int year, int quarter) {
         if (quarter < 1 || quarter > 4) {
             throw new BadRequestException("quarter must be between 1 and 4");
         }
@@ -296,7 +296,7 @@ public class AttendanceQueryService {
         LocalDate start = LocalDate.of(year, months.get(0), 1);
         LocalDate end = LocalDate.of(year, months.get(2), 1)
                 .withDayOfMonth(LocalDate.of(year, months.get(2), 1).lengthOfMonth());
-        return scopedReport(projectId, resourceId, start, end, "Q" + quarter + " " + year, 3);
+        return scopedReport(projectId, resourceId, organisationId, start, end, "Q" + quarter + " " + year, 3);
     }
 
     /**
@@ -310,11 +310,11 @@ public class AttendanceQueryService {
         }
         LocalDate start = LocalDate.of(year, 1, 1);
         LocalDate end = LocalDate.of(year, 12, 31);
-        return scopedReport(projectId, resourceId, start, end, String.valueOf(year), 12);
+        return scopedReport(projectId, resourceId, null, start, end, String.valueOf(year), 12);
     }
 
     private AttendanceReportResult scopedReport(
-            String projectId, String resourceId, LocalDate start, LocalDate end,
+            String projectId, String resourceId, String organisationId, LocalDate start, LocalDate end,
             String periodLabel, int numberOfMonths) {
         periodValidator.validate(start, end, projectId, resourceId, periodLabel);
         if (resourceId != null && !resourceId.isBlank()) {
@@ -326,13 +326,15 @@ public class AttendanceQueryService {
         if (projectId == null || projectId.isBlank()) {
             throw new BadRequestException("projectId or resourceId is required");
         }
-        return projectDashboard(projectId, start, end, periodLabel, numberOfMonths);
+        return projectDashboard(projectId, organisationId, start, end, periodLabel, numberOfMonths);
     }
 
     private AttendanceReportResult projectDashboard(
-            String projectId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
+            String projectId, String organisationId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
         List<AttendanceReportSummary> rows = latestAssignmentsActiveDuring(projectId, start, end).stream()
+                .filter(pr -> organisationId == null || organisationId.isBlank()
+                        || organisationId.equals(pr.getOrganisationId()))
                 .map(pr -> buildSummary(pr.getResource(), projectId, start, end, periodLabel, leaveLimit,
                         pr.getRole(), pr.getAssignmentStartDate(), pr.isActive(), pr.getAssignmentEndDate()))
                 .toList();

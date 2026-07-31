@@ -139,9 +139,11 @@ public class AttendanceController {
                     String projectId,
             @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
                     String resourceId,
+            @Parameter(description = "Organisation id filter") @RequestParam(required = false)
+                    String organisationId,
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam("quarter") int quarter) {
-        return attendanceQueryService.quarterlyReport(projectId, resourceId, year, quarter);
+        return attendanceQueryService.quarterlyReport(projectId, resourceId, organisationId, year, quarter);
     }
 
     /**
