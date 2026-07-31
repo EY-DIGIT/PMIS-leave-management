@@ -38,4 +38,7 @@ public interface ProjectResourceRepository extends JpaRepository<ProjectResource
     @Query("SELECT pr FROM ProjectResource pr WHERE pr.active = true "
             + "AND pr.resource.lastDate IS NOT NULL AND pr.resource.lastDate <= :today")
     List<ProjectResource> findActiveAssignmentsDueForDeactivation(@Param("today") LocalDate today);
+
+    /** The assignment whose outgoing resource named {@code replacedByResId} as its replacement. */
+    Optional<ProjectResource> findByReplacedByResIdAndProjectId(String replacedByResId, String projectId);
 }

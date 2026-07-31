@@ -776,7 +776,7 @@ public class AttendanceQueryService {
                     .orElse(resource.getDateOfJoining());
 
             QuarterLeaveCalculation calculation = quarterLeaveResolver.calculate(
-                    resource.getId(), resourceProjectId, resourceOrgId, joiningDate, year, quarter,
+                    resource.getResId(), resource.getId(), resourceProjectId, resourceOrgId, joiningDate, year, quarter,
                     absentDates, halfDayDates);
 
             String milestoneId = null;

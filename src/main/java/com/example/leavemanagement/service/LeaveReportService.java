@@ -364,7 +364,7 @@ public class LeaveReportService {
 
         Long resourceId = resource.map(MasterResource::getId).orElse(null);
         QuarterLeaveCalculation calc =
-                quarterLeaveResolver.calculate(resourceId, projectId, organisationId, joiningDate, year, quarter,
+                quarterLeaveResolver.calculate(attendanceId, resourceId, projectId, organisationId, joiningDate, year, quarter,
                         absentDates, halfDayDates);
 
         String designation = assignment != null ? assignment.getRole() : null;

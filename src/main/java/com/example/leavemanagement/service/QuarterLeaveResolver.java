@@ -5,11 +5,17 @@ import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
+import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
+import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -34,18 +40,21 @@ public class QuarterLeaveResolver {
     private final LeavePolicyClient leavePolicyClient;
     private final QuarterLeavePolicy policy;
     private final ProjectConfigRepository projectConfigRepository;
+    private final ProjectResourceRepository projectResourceRepository;
 
     public QuarterLeaveResolver(
             AttendanceRepository attendanceRepository,
             PublicHolidayRepository holidayRepository,
             LeavePolicyClient leavePolicyClient,
             QuarterLeavePolicy policy,
-            ProjectConfigRepository projectConfigRepository) {
+            ProjectConfigRepository projectConfigRepository,
+            ProjectResourceRepository projectResourceRepository) {
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
         this.leavePolicyClient = leavePolicyClient;
         this.policy = policy;
         this.projectConfigRepository = projectConfigRepository;
+        this.projectResourceRepository = projectResourceRepository;
     }
 
     /**
@@ -81,6 +90,7 @@ public class QuarterLeaveResolver {
     /**
      * Computes the quarter's paid/unpaid leave breakdown for one resource.
      *
+     * @param resId the resource's string identifier (res_id), used for replacement chain lookup
      * @param resourceId the {@link com.example.leavemanagement.entity.MasterResource} id
      * @param projectId the resource's project (or {@code null})
      * @param joiningDate the resource's effective assignment start, for pro-rating (or {@code null})
@@ -90,6 +100,7 @@ public class QuarterLeaveResolver {
      * @param halfDayDates dates the resource worked a half-day (HD) within the quarter
      */
     public QuarterLeaveCalculation calculate(
+            String resId,
             Long resourceId,
             String projectId,
             String organisationId,
@@ -112,10 +123,25 @@ public class QuarterLeaveResolver {
                 ? resolveCarriedForwardDays(resourceId, year, quarter, joiningDate, maxLeaves, cycleDay)
                 : 0;
 
+        List<ProjectResource> predecessorChain =
+                (resId != null && projectId != null)
+                        ? findPredecessorChain(resId, projectId, quarterStart, quarterEnd)
+                        : List.of();
+
+        int effectiveMaxLeaves;
+        LocalDate effectiveJoiningDate;
+        if (predecessorChain.isEmpty()) {
+            effectiveMaxLeaves = maxLeaves;
+            effectiveJoiningDate = joiningDate;
+        } else {
+            effectiveMaxLeaves = computeRemainingFromChain(predecessorChain, quarterStart, quarterEnd, holidays, maxLeaves);
+            effectiveJoiningDate = null;
+        }
+
         return policy.compute(
-                quarterStart, quarterEnd, joiningDate,
+                quarterStart, quarterEnd, effectiveJoiningDate,
                 absentDates, halfDayDates,
-                holidays, maxLeaves, carriedForwardDays);
+                holidays, effectiveMaxLeaves, carriedForwardDays);
     }
 
     /**
@@ -187,5 +213,82 @@ public class QuarterLeaveResolver {
                 .collect(Collectors.toSet());
     }
 
+    /**
+     * Walks the replacement chain backward from {@code resId} to find all predecessor assignments
+     * that were active during the quarter. Returns them in root-first order (oldest first).
+     * Returns an empty list when the resource is not a replacement.
+     */
+    private List<ProjectResource> findPredecessorChain(
+            String resId, String projectId, LocalDate quarterStart, LocalDate quarterEnd) {
+        List<ProjectResource> chain = new ArrayList<>();
+        String lookup = resId;
+        Set<String> visited = new HashSet<>();
+        visited.add(lookup);
+
+        while (true) {
+            Optional<ProjectResource> pred =
+                    projectResourceRepository.findByReplacedByResIdAndProjectId(lookup, projectId);
+            if (pred.isEmpty()) break;
+            ProjectResource pr = pred.get();
+
+            LocalDate start = pr.getAssignmentStartDate();
+            LocalDate end = pr.getAssignmentEndDate();
+            boolean overlapsQuarter = !start.isAfter(quarterEnd)
+                    && (end == null || !end.isBefore(quarterStart));
+            if (!overlapsQuarter) break;
+
+            String predResId = pr.getResource().getResId();
+            if (!visited.add(predResId)) break;
+
+            chain.add(pr);
+            lookup = predResId;
+        }
+
+        Collections.reverse(chain);
+        return chain;
+    }
+
+    /**
+     * Computes the leave balance remaining for the current resource after all predecessors
+     * in the chain have consumed their share. The chain root's pro-rated permissible
+     * (based on their own joining date) is the starting balance.
+     */
+    private int computeRemainingFromChain(
+            List<ProjectResource> chain,
+            LocalDate quarterStart, LocalDate quarterEnd,
+            Set<LocalDate> holidays, int maxLeaves) {
+        ProjectResource root = chain.get(0);
+        int remaining = proRatedPermissible(quarterStart, quarterEnd, root.getAssignmentStartDate(), maxLeaves);
+
+        for (ProjectResource pr : chain) {
+            List<Attendance> predAttendance = attendanceRepository
+                    .findByResourceIdAndAttendanceDateBetween(
+                            pr.getResource().getId(), quarterStart, quarterEnd);
+            Set<LocalDate> predAbsent = predAttendance.stream()
+                    .filter(a -> a.getStatus() == AttendanceStatus.A)
+                    .map(Attendance::getAttendanceDate)
+                    .collect(Collectors.toSet());
+            Set<LocalDate> predHalfDays = predAttendance.stream()
+                    .filter(a -> a.getStatus() == AttendanceStatus.HD)
+                    .map(Attendance::getAttendanceDate)
+                    .collect(Collectors.toSet());
+
+            QuarterLeaveCalculation predCalc = policy.compute(
+                    quarterStart, quarterEnd, pr.getAssignmentStartDate(),
+                    predAbsent, predHalfDays, holidays, remaining, 0);
+            remaining = Math.max(0, remaining - (int) Math.round(predCalc.paidLeaveDays()));
+        }
+        return remaining;
+    }
+
+    private int proRatedPermissible(
+            LocalDate quarterStart, LocalDate quarterEnd, LocalDate joiningDate, int maxLeaves) {
+        if (joiningDate == null || !joiningDate.isAfter(quarterStart)) return maxLeaves;
+        if (joiningDate.isAfter(quarterEnd)) return 0;
+        long totalDays = ChronoUnit.DAYS.between(quarterStart, quarterEnd) + 1;
+        long availableDays = ChronoUnit.DAYS.between(joiningDate, quarterEnd) + 1;
+        int prorated = Math.round((float) maxLeaves * availableDays / totalDays);
+        return Math.max(0, Math.min(maxLeaves, prorated));
+    }
 
 }
