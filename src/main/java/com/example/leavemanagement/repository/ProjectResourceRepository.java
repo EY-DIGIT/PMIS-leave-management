@@ -41,4 +41,21 @@ public interface ProjectResourceRepository extends JpaRepository<ProjectResource
 
     /** The assignment whose outgoing resource named {@code replacedByResId} as its replacement. */
     Optional<ProjectResource> findByReplacedByResIdAndProjectId(String replacedByResId, String projectId);
+
+    /**
+     * All assignments on a project whose window overlaps the given date range — includes
+     * resources who joined or left mid-period.
+     */
+    @Query("SELECT pr FROM ProjectResource pr WHERE pr.projectId = :projectId "
+            + "AND pr.assignmentStartDate <= :endDate "
+            + "AND (pr.assignmentEndDate IS NULL OR pr.assignmentEndDate >= :startDate)")
+    List<ProjectResource> findByProjectIdActiveDuring(
+            @Param("projectId") String projectId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    /** All assignments for a resource on a project, newest first — used to find the most recent
+     *  assignment when no active one exists (e.g. inactive resources). */
+    List<ProjectResource> findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(
+            String resId, String projectId);
 }

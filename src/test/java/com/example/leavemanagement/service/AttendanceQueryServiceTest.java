@@ -258,7 +258,7 @@ class AttendanceQueryServiceTest {
         resource.setName("Sanju");
         setId(resource, 1L);
         ProjectResource assignment = new ProjectResource(resource, "P1", "Dev", LocalDate.of(2020, 1, 1));
-        when(projectResourceRepository.findByProjectIdAndActiveTrue("P1")).thenReturn(List.of(assignment));
+        when(projectResourceRepository.findByProjectIdActiveDuring(eq("P1"), any(), any())).thenReturn(List.of(assignment));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any()))
                 .thenReturn(List.of(new com.example.leavemanagement.entity.PublicHoliday(
                         LocalDate.of(2026, 7, 6), "Test Holiday"))); // a Monday
@@ -393,7 +393,8 @@ class AttendanceQueryServiceTest {
         resource.setName("Sanju");
         setId(resource, 1L);
         ProjectResource assignment = new ProjectResource(resource, "P1", "Dev", LocalDate.of(2020, 1, 1));
-        when(projectResourceRepository.findByProjectIdAndActiveTrue("P1")).thenReturn(List.of(assignment));
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(assignment));
+        when(projectResourceRepository.findByProjectIdActiveDuring(eq("P1"), any(), any())).thenReturn(List.of(assignment));
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());

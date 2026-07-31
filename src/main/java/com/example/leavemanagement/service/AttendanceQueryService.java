@@ -332,9 +332,9 @@ public class AttendanceQueryService {
     private AttendanceReportResult projectDashboard(
             String projectId, LocalDate start, LocalDate end, String periodLabel, int numberOfMonths) {
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
-        List<AttendanceReportSummary> rows = projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+        List<AttendanceReportSummary> rows = latestAssignmentsActiveDuring(projectId, start, end).stream()
                 .map(pr -> buildSummary(pr.getResource(), projectId, start, end, periodLabel, leaveLimit,
-                        pr.getRole(), pr.getAssignmentStartDate()))
+                        pr.getRole(), pr.getAssignmentStartDate(), pr.isActive(), pr.getAssignmentEndDate()))
                 .toList();
         return new AttendanceReportResult(periodLabel, rows.size(), buildAttendanceTotals(rows), rows);
     }
@@ -344,14 +344,39 @@ public class AttendanceQueryService {
         MasterResource resource = masterResourceRepository
                 .findByResId(resourceId)
                 .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
-        ProjectResource assignment = projectResourceRepository
-                .findByResourceIdAndActiveTrue(resource.getId())
-                .orElse(null);
+        ProjectResource assignment = resolveAssignment(resource);
         String projectId   = assignment != null ? assignment.getProjectId() : null;
         String designation = assignment != null ? assignment.getRole() : null;
         LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
+        boolean active = assignment != null && assignment.isActive();
+        LocalDate lastWorkingDate = assignment != null ? assignment.getAssignmentEndDate() : null;
         int leaveLimit = resolveLeaveLimit(projectId, numberOfMonths);
-        return buildSummary(resource, projectId, start, end, periodLabel, leaveLimit, designation, joiningDate);
+        return buildSummary(resource, projectId, start, end, periodLabel, leaveLimit, designation, joiningDate, active, lastWorkingDate);
+    }
+
+    private ProjectResource resolveAssignment(MasterResource resource) {
+        return projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId())
+                .orElseGet(() -> projectResourceRepository
+                        .findByResourceIdOrderByAssignmentStartDateAsc(resource.getId())
+                        .stream().reduce((a, b) -> b).orElse(null));
+    }
+
+    private ProjectResource resolveAssignmentForProject(String resId, String projectId) {
+        return projectResourceRepository
+                .findByResource_ResIdAndProjectIdAndActiveTrue(resId, projectId)
+                .orElseGet(() -> projectResourceRepository
+                        .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(resId, projectId)
+                        .stream().findFirst().orElse(null));
+    }
+
+    private List<ProjectResource> latestAssignmentsActiveDuring(
+            String projectId, LocalDate start, LocalDate end) {
+        List<ProjectResource> all = projectResourceRepository.findByProjectIdActiveDuring(projectId, start, end);
+        Map<Long, ProjectResource> latestByResource = new LinkedHashMap<>();
+        all.stream()
+                .sorted(Comparator.comparing(ProjectResource::getAssignmentStartDate))
+                .forEach(pr -> latestByResource.put(pr.getResource().getId(), pr));
+        return new ArrayList<>(latestByResource.values());
     }
 
     private AttendanceReportTotals buildAttendanceTotals(List<AttendanceReportSummary> rows) {
@@ -387,13 +412,14 @@ public class AttendanceQueryService {
 
     private AttendanceReportSummary buildSummary(
             MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel,
-            int leaveLimit, String designation, LocalDate joiningDate) {
+            int leaveLimit, String designation, LocalDate joiningDate, boolean active, LocalDate lastWorkingDate) {
         LocalDate effectiveStart = (joiningDate != null && joiningDate.isAfter(start)) ? joiningDate : start;
-        int totalDays = (int) (end.toEpochDay() - effectiveStart.toEpochDay()) + 1;
-        Set<LocalDate> holidays = holidaysBetween(effectiveStart, end);
+        LocalDate effectiveEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(end)) ? lastWorkingDate : end;
+        int totalDays = (int) (effectiveEnd.toEpochDay() - effectiveStart.toEpochDay()) + 1;
+        Set<LocalDate> holidays = holidaysBetween(effectiveStart, effectiveEnd);
         int weekOffDays = 0;
         int holidayDays = 0;
-        for (LocalDate date = effectiveStart; !date.isAfter(end); date = date.plusDays(1)) {
+        for (LocalDate date = effectiveStart; !date.isAfter(effectiveEnd); date = date.plusDays(1)) {
             if (isWeekend(date)) {
                 weekOffDays++;
             } else if (holidays.contains(date)) {
@@ -403,7 +429,7 @@ public class AttendanceQueryService {
         int workingDays = totalDays - weekOffDays - holidayDays;
 
         List<Attendance> rows =
-                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), effectiveStart, end);
+                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), effectiveStart, effectiveEnd);
 
         String milestoneId = null;
         String activityId  = null;
@@ -439,6 +465,8 @@ public class AttendanceQueryService {
                 milestoneId,
                 activityId,
                 joiningDate,
+                lastWorkingDate,
+                active,
                 periodLabel,
                 workingDays,
                 presentDays,
@@ -463,18 +491,18 @@ public class AttendanceQueryService {
         }
     }
 
-    /** Dashboard: one month's cost per resource currently active on the project. */
+    /** Dashboard: one month's cost per resource active on the project during that month. */
     @Transactional(readOnly = true)
     public List<MonthlyResourceCost> monthlyCostReport(String projectId, int year, int month) {
         validateMonthAndYear(year, month);
-        String orgId = projectResourceRepository.findByProjectIdAndActiveTrue(projectId)
+        String orgId = projectResourceRepository.findByProjectId(projectId)
                 .stream().findFirst().map(ProjectResource::getOrganisationId).orElse(null);
         int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, orgId);
         LocalDate fromDate = LocalDate.of(year, month, cycleDay);
         LocalDate toDate = fromDate.plusMonths(1).minusDays(1);
         String periodLabel = fromDate.format(MONTH_YEAR);
         periodValidator.validate(fromDate, toDate, projectId, null, periodLabel);
-        return projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+        return latestAssignmentsActiveDuring(projectId, fromDate, toDate).stream()
                 .map(ProjectResource::getResource)
                 .map(resource -> buildMonthlyCost(resource, projectId, fromDate, toDate, periodLabel))
                 .toList();
@@ -539,8 +567,7 @@ public class AttendanceQueryService {
                     .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
             String resolvedProjectId = projectId != null && !projectId.isBlank()
                     ? projectId
-                    : projectResourceRepository
-                            .findByResourceIdAndActiveTrue(resource.getId())
+                    : Optional.ofNullable(resolveAssignment(resource))
                             .map(ProjectResource::getProjectId)
                             .orElse(null);
             rows = List.of(buildCostSummary(resource, resolvedProjectId, year, months, periodLabel));
@@ -548,7 +575,7 @@ public class AttendanceQueryService {
             if (projectId == null || projectId.isBlank()) {
                 throw new BadRequestException("projectId or resourceId is required");
             }
-            rows = projectResourceRepository.findByProjectIdAndActiveTrue(projectId).stream()
+            rows = latestAssignmentsActiveDuring(projectId, periodStart, periodEnd).stream()
                     .map(ProjectResource::getResource)
                     .map(resource -> buildCostSummary(resource, projectId, year, months, periodLabel))
                     .toList();
@@ -566,9 +593,7 @@ public class AttendanceQueryService {
     private ResourceCostSummary buildCostSummary(
             MasterResource resource, String projectId, int year, List<Integer> months, String periodLabel) {
         ProjectResource assignment = projectId == null ? null
-                : projectResourceRepository
-                        .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), projectId)
-                        .orElse(null);
+                : resolveAssignmentForProject(resource.getResId(), projectId);
         String assignmentOrgId = assignment != null ? assignment.getOrganisationId() : null;
         int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, assignmentOrgId);
 
@@ -630,13 +655,13 @@ public class AttendanceQueryService {
         }
         ProjectResource assignment = projectId == null
                 ? null
-                : projectResourceRepository
-                        .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), projectId)
-                        .orElse(null);
+                : resolveAssignmentForProject(resource.getResId(), projectId);
         LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
+        LocalDate lastWorkingDate = assignment != null ? assignment.getAssignmentEndDate() : null;
+        boolean active = assignment != null && assignment.isActive();
         AttendanceReportSummary attendance = buildSummary(
                 resource, projectId, fromDate, toDate, periodLabel, monthlyLeaveAllowance,
-                assignment != null ? assignment.getRole() : null, joiningDate);
+                assignment != null ? assignment.getRole() : null, joiningDate, active, lastWorkingDate);
         String rateYear = resolveRateYear(
                 projectId,
                 assignment != null ? assignment.getOrganisationId() : null,
@@ -649,7 +674,8 @@ public class AttendanceQueryService {
 
         int fullCalendarDays = (int) (toDate.toEpochDay() - fromDate.toEpochDay()) + 1;
         LocalDate effectiveFrom = (joiningDate != null && joiningDate.isAfter(fromDate)) ? joiningDate : fromDate;
-        int calendarDays = Math.max(0, (int) (toDate.toEpochDay() - effectiveFrom.toEpochDay()) + 1);
+        LocalDate effectiveTo = (lastWorkingDate != null && lastWorkingDate.isBefore(toDate)) ? lastWorkingDate : toDate;
+        int calendarDays = Math.max(0, (int) (effectiveTo.toEpochDay() - effectiveFrom.toEpochDay()) + 1);
         double unpaidLeaveDays = attendance.unpaidLeaveDays();
         double perDayRate = monthlyRate != null ? round2(monthlyRate / fullCalendarDays) : 0d;
         double deductedAmount = monthlyRate != null ? round2(unpaidLeaveDays * monthlyRate / fullCalendarDays) : 0d;

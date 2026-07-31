@@ -437,7 +437,7 @@ public class MasterResourceService {
                 r.getCategory(),
                 r.getCategoryDetails(),
                 r.getDateOfJoining(),
-                r.getLastDate(),
+                a != null ? a.getAssignmentEndDate() : r.getLastDate(),
                 a != null ? a.getProjectId() : null,
                 a != null ? a.getRole() : null,
                 a != null ? a.getRateCardByYear() : Map.of(),
