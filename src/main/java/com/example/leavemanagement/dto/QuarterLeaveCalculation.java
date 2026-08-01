@@ -30,7 +30,7 @@ import java.util.List;
  * @param sandwichDates non-working days (weekends/holidays) pulled in by the sandwich rule
  */
 public record QuarterLeaveCalculation(
-        int permissibleLeave,
+        double permissibleLeave,
         int carriedForwardLeave,
         double leaveDaysTaken,
         double paidLeaveDays,

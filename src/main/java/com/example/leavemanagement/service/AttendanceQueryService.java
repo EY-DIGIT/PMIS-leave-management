@@ -813,13 +813,10 @@ public class AttendanceQueryService {
             LocalDate joiningDate = assignmentOpt
                     .map(ProjectResource::getAssignmentStartDate)
                     .orElse(resource.getDateOfJoining());
-            LocalDate lastWorkingDate = assignmentOpt
-                    .map(ProjectResource::getAssignmentEndDate)
-                    .orElse(null);
 
             QuarterLeaveCalculation calculation = quarterLeaveResolver.calculate(
                     resource.getResId(), resource.getId(), resourceProjectId, resourceOrgId,
-                    joiningDate, lastWorkingDate, year, quarter,
+                    joiningDate, year, quarter,
                     absentDates, halfDayDates);
 
             String milestoneId = null;

@@ -86,7 +86,8 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository);
+                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository,
+                projectResourceRepository);
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
@@ -560,7 +561,7 @@ class AttendanceQueryServiceTest {
 
         var settlement = report.resources().get(0);
         assertThat(settlement.employeeName()).isEqualTo("Resource A");
-        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(6);
+        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(6.0);
         assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(6.0);
         assertThat(settlement.calculation().unpaidLeaveDays()).isEqualTo(1.0);
         assertThat(settlement.calculation().totalUnpaidDays()).isEqualTo(1.0);
@@ -595,7 +596,7 @@ class AttendanceQueryServiceTest {
 
         var settlement = report.resources().get(0);
         assertThat(settlement.calculation().carriedForwardLeave()).isEqualTo(4);
-        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(10); // 6 base + 4 carried in
+        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(10.0); // 6 base + 4 carried in
         assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(4.0);
         assertThat(settlement.calculation().unpaidLeaveDays()).isZero();
     }

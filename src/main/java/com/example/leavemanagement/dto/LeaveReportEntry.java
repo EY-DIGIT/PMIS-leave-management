@@ -4,7 +4,7 @@ public record LeaveReportEntry(
         String attendanceId,
         String employeeName,
         String projectId,
-        int permissibleLeave,
+        double permissibleLeave,
         double leaveTaken,
         double paidLeave,
         double unpaidLeave,

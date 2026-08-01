@@ -88,7 +88,7 @@ public class QuarterLeavePolicy {
             Set<LocalDate> absentDates,
             Set<LocalDate> halfDayDates,
             Set<LocalDate> holidays,
-            int maxLeavesPerPeriod,
+            double maxLeavesPerPeriod,
             int carriedForwardDays) {
 
         Set<LocalDate> holidaySet = holidays == null ? Set.of() : holidays;
@@ -97,11 +97,11 @@ public class QuarterLeavePolicy {
                 (joiningDate != null && joiningDate.isAfter(quarterStart)) ? joiningDate : quarterStart;
 
         if (effectiveStart.isAfter(quarterEnd)) {
-            return new QuarterLeaveCalculation(0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
+            return new QuarterLeaveCalculation(0.0, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0,
                     List.of(), List.of(), List.of(), List.of());
         }
 
-        int basePermissible =
+        double basePermissible =
                 permissibleLeave(quarterStart, quarterEnd, effectiveStart, joiningDate, maxLeavesPerPeriod);
         int carriedForward = Math.max(0, carriedForwardDays);
         double permissible = basePermissible + carriedForward;
@@ -178,17 +178,17 @@ public class QuarterLeavePolicy {
     // Helpers
     // ------------------------------------------------------------------
 
-    private int permissibleLeave(
+    private double permissibleLeave(
             LocalDate quarterStart, LocalDate quarterEnd,
             LocalDate effectiveStart, LocalDate joiningDate,
-            int maxLeaves) {
+            double maxLeaves) {
         if (joiningDate == null || !joiningDate.isAfter(quarterStart)) {
             return maxLeaves;
         }
         long totalDays = ChronoUnit.DAYS.between(quarterStart, quarterEnd) + 1;
         long availableDays = ChronoUnit.DAYS.between(effectiveStart, quarterEnd) + 1;
-        int prorated = Math.round((float) maxLeaves * availableDays / totalDays);
-        return Math.max(0, Math.min(maxLeaves, prorated));
+        double prorated = Math.round(maxLeaves * availableDays / totalDays);
+        return Math.max(0.0, Math.min(maxLeaves, prorated));
     }
 
     /**

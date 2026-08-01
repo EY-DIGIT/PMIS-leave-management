@@ -33,7 +33,7 @@ public record EmployeeLeaveDetail(
         int quarter,
         LocalDate quarterStart,
         LocalDate quarterEnd,
-        int permissibleLeave,
+        double permissibleLeave,
         int carriedForwardLeave,
         double leaveTaken,
         double paidLeave,

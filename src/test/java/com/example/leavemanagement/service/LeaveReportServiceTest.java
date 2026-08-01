@@ -76,7 +76,8 @@ class LeaveReportServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, publicHolidayRepository, leavePolicyClient, policy, projectConfigRepository);
+                attendanceRepository, publicHolidayRepository, leavePolicyClient, policy, projectConfigRepository,
+                projectResourceRepository);
         service = new LeaveReportService(
                 attendanceQueryService, masterResourceRepository, projectResourceRepository,
                 attendanceRepository, leaveRelaxationRepository, quarterLeaveResolver, periodValidator,
