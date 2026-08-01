@@ -347,7 +347,7 @@ class AttendanceQueryServiceTest {
 
     @Test
     void employeeMonthlyCostMatchesWorkedExample() {
-        // July 2026: 31 calendar days. 22 present, 1 absent (no leave policy → 1 unpaid day).
+        // July 2026: 31 calendar days. 22 present, 1 absent. Leave policy: 0 paid/quarter → 1 unpaid.
         // cost = round2(88200 × 30/31) = 85354.84.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
@@ -359,6 +359,8 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(
+                Optional.of(new LeavePolicyResponse(null, null, null, null, null, null, 0, "QUARTERLY", null, false, null, null)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         List<Attendance> rows = new java.util.ArrayList<>();
@@ -373,8 +375,7 @@ class AttendanceQueryServiceTest {
             markedAbsent = true;
             rows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                        1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
                 .thenReturn(rows);
 
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
@@ -449,7 +450,7 @@ class AttendanceQueryServiceTest {
 
     @Test
     void monthlyCostReflectsAttendanceOnlyRelaxationIsSettledQuarterly() {
-        // July 2026: 31 calendar days, 3 absent (no leave policy → 3 unpaid days).
+        // July 2026: 31 calendar days, 3 absent. Leave policy: 0 paid/quarter → 3 unpaid days.
         // cost = round2(88200 × 28/31) = 79664.52. Relaxation is quarterly, not monthly.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
@@ -461,6 +462,8 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(
+                Optional.of(new LeavePolicyResponse(null, null, null, null, null, null, 0, "QUARTERLY", null, false, null, null)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         List<Attendance> rows = new java.util.ArrayList<>();
@@ -475,8 +478,7 @@ class AttendanceQueryServiceTest {
             absentMarked++;
             rows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                        1L, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 31)))
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
                 .thenReturn(rows);
 
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
@@ -490,7 +492,7 @@ class AttendanceQueryServiceTest {
 
     @Test
     void monthlyCostForAugustReflectsAttendanceOnlyNoRelaxation() {
-        // August 2026: 31 calendar days, 2 absent (no leave policy → 2 unpaid days).
+        // August 2026: 31 calendar days, 2 absent. Leave policy: 0 paid/quarter → 2 unpaid days.
         // cost = round2(88200 × 29/31) = 82509.68. Relaxation is quarterly, not monthly.
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
@@ -502,6 +504,8 @@ class AttendanceQueryServiceTest {
         when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(
+                Optional.of(new LeavePolicyResponse(null, null, null, null, null, null, 0, "QUARTERLY", null, false, null, null)));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
 
         List<Attendance> augustRows = new java.util.ArrayList<>();
@@ -516,8 +520,7 @@ class AttendanceQueryServiceTest {
             augustAbsentMarked++;
             augustRows.add(new Attendance(resource, "P1", null, "M1", null,date, status));
         }
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                        1L, LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31)))
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
                 .thenReturn(augustRows);
 
         MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 8);

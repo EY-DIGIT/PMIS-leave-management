@@ -202,7 +202,13 @@ public class AttendanceExcelParser {
         return null;
     }
 
-    /** A cell counts as "no attendance" when blank, numeric 0, or a zero time string. */
+    private static final Set<String> NON_WORKING_LABELS = Set.of(
+            "wo", "pl", "ul", "h", "rl", "hd", "a", "l", "wfh");
+
+    /**
+     * A cell counts as "no attendance" when blank, numeric 0, a zero time string,
+     * or a non-working status label (WO, PL, UL, H, RL, HD, A, L, WFH).
+     */
     private boolean isZero(Cell cell) {
         if (cell == null || cell.getCellType() == CellType.BLANK) {
             return true;
@@ -211,7 +217,10 @@ public class AttendanceExcelParser {
             return cell.getNumericCellValue() == 0d;
         }
         String s = formatter.formatCellValue(cell).trim();
-        return s.isEmpty() || s.equals("0") || s.equals("0:00") || s.equals("00:00");
+        if (s.isEmpty() || s.equals("0") || s.equals("0:00") || s.equals("00:00")) {
+            return true;
+        }
+        return NON_WORKING_LABELS.contains(s.toLowerCase());
     }
 
     /**

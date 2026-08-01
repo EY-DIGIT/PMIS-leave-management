@@ -148,6 +148,47 @@ class AttendanceExcelParserTest {
         }
     }
 
+    @Test
+    void treatsNonWorkingStatusLabelsAsAbsence() {
+        try (XSSFWorkbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Attendance");
+            sheet.createRow(0).createCell(0).setCellValue("title");
+
+            Row in = sheet.createRow(1);
+            Row out = sheet.createRow(2);
+            Row total = sheet.createRow(3);
+
+            in.createCell(0).setCellValue("E1");
+            in.createCell(2).setCellValue("Dev");
+            in.createCell(LABEL_COL).setCellValue("In-Time");
+            out.createCell(LABEL_COL).setCellValue("Out-Time");
+            total.createCell(LABEL_COL).setCellValue("Total-Time");
+
+            // Day 1: WO (Weekend Off) label — should be treated as absent
+            in.createCell(LABEL_COL + 1).setCellValue("WO");
+            out.createCell(LABEL_COL + 1).setCellValue("WO");
+            // Day 2: PL (Paid Leave) label
+            in.createCell(LABEL_COL + 2).setCellValue("PL");
+            out.createCell(LABEL_COL + 2).setCellValue("PL");
+            // Day 3: UL (Unpaid Leave) label
+            in.createCell(LABEL_COL + 3).setCellValue("UL");
+            out.createCell(LABEL_COL + 3).setCellValue("UL");
+
+            LocalDate startDate = LocalDate.of(2026, 6, 1);
+            LocalDate endDate = LocalDate.of(2026, 6, 3);
+            List<EmployeeAttendanceByDate> result = parser.parse(toFile(wb), startDate, endDate);
+
+            EmployeeAttendanceByDate e = result.get(0);
+            assertThat(e.absentDates()).containsExactlyInAnyOrder(
+                    LocalDate.of(2026, 6, 1),
+                    LocalDate.of(2026, 6, 2),
+                    LocalDate.of(2026, 6, 3));
+            assertThat(e.workedMinutesByDate()).isEmpty();
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
     private void addEmployeeBlock(Sheet sheet, int startRow, String id, String designation) {
         addEmployeeBlock(sheet, startRow, id, designation, 3);
     }
