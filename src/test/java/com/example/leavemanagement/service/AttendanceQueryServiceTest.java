@@ -549,7 +549,6 @@ class AttendanceQueryServiceTest {
         when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
                 .thenReturn(rows);
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.empty());
 
         QuarterLeaveReport report = service.quarterlySettlement(2024, 2);
 
@@ -588,8 +587,6 @@ class AttendanceQueryServiceTest {
                         1L, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 3, 31)))
                 .thenReturn(q1Rows);
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-        ProjectResource assignment = new ProjectResource(resource, "P1", "Dev", LocalDate.of(2020, 1, 1));
-        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
         when(leavePolicyClient.getLeavePolicy("P1"))
                 .thenReturn(Optional.of(new LeavePolicyResponse(
                         4, 8, "HALF_DAY", "FULL_DAY", true, true, 6, "QUARTERLY", true, true, true, true)));

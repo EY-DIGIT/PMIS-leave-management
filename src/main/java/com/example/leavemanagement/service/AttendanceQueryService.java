@@ -803,13 +803,23 @@ public class AttendanceQueryService {
                     .map(Attendance::getAttendanceDate)
                     .collect(Collectors.toSet());
 
-            LocalDate joiningDate = projectResourceRepository
-                    .findByResourceIdAndActiveTrue(resource.getId())
+            Optional<ProjectResource> assignmentOpt = projectResourceRepository
+                    .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), resourceProjectId)
+                    .or(() -> projectResourceRepository
+                            .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(
+                                    resource.getResId(), resourceProjectId)
+                            .stream()
+                            .findFirst());
+            LocalDate joiningDate = assignmentOpt
                     .map(ProjectResource::getAssignmentStartDate)
                     .orElse(resource.getDateOfJoining());
+            LocalDate lastWorkingDate = assignmentOpt
+                    .map(ProjectResource::getAssignmentEndDate)
+                    .orElse(null);
 
             QuarterLeaveCalculation calculation = quarterLeaveResolver.calculate(
-                    resource.getResId(), resource.getId(), resourceProjectId, resourceOrgId, joiningDate, year, quarter,
+                    resource.getResId(), resource.getId(), resourceProjectId, resourceOrgId,
+                    joiningDate, lastWorkingDate, year, quarter,
                     absentDates, halfDayDates);
 
             String milestoneId = null;

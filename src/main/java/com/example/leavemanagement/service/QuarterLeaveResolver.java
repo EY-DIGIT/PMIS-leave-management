@@ -10,6 +10,7 @@ import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -96,6 +97,7 @@ public class QuarterLeaveResolver {
             String projectId,
             String organisationId,
             LocalDate joiningDate,
+            LocalDate lastWorkingDate,
             int year,
             int quarter,
             Set<LocalDate> absentDates,
@@ -103,11 +105,28 @@ public class QuarterLeaveResolver {
         int cycleDay = resolveCycleDay(projectId, organisationId);
         LocalDate quarterStart = quarterStart(year, quarter, cycleDay);
         LocalDate quarterEnd = quarterEnd(year, quarter, cycleDay);
-        Set<LocalDate> holidays = holidaysBetween(quarterStart, quarterEnd);
+
+        LocalDate effectiveStart = (joiningDate != null && joiningDate.isAfter(quarterStart))
+                ? joiningDate : quarterStart;
+        LocalDate effectiveEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(quarterEnd))
+                ? lastWorkingDate : quarterEnd;
+
+        Set<LocalDate> holidays = holidaysBetween(quarterStart, effectiveEnd);
 
         Optional<LeavePolicyResponse> leavePolicy =
                 projectId == null ? Optional.empty() : leavePolicyClient.getLeavePolicy(projectId);
         int maxLeaves = resolveMaxLeaves(projectId, leavePolicy);
+
+        int adjustedMaxLeaves;
+        if (effectiveStart.isAfter(quarterStart) || effectiveEnd.isBefore(quarterEnd)) {
+            long totalDays = ChronoUnit.DAYS.between(quarterStart, quarterEnd) + 1;
+            long effectiveDays = Math.max(0, ChronoUnit.DAYS.between(effectiveStart, effectiveEnd) + 1);
+            adjustedMaxLeaves = Math.max(0, Math.min(maxLeaves,
+                    Math.round((float) maxLeaves * effectiveDays / totalDays)));
+        } else {
+            adjustedMaxLeaves = maxLeaves;
+        }
+
         boolean carryForwardAllowed =
                 leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
         int carriedForwardDays = (resourceId != null && carryForwardAllowed)
@@ -115,9 +134,9 @@ public class QuarterLeaveResolver {
                 : 0;
 
         return policy.compute(
-                quarterStart, quarterEnd, joiningDate,
+                quarterStart, effectiveEnd, null,
                 absentDates, halfDayDates,
-                holidays, maxLeaves, carriedForwardDays);
+                holidays, adjustedMaxLeaves, carriedForwardDays);
     }
 
     /**

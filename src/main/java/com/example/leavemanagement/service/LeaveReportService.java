@@ -379,13 +379,15 @@ public class LeaveReportService {
         String projectName = null;
 
         LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
+        LocalDate lastWorkingDate = assignment != null ? assignment.getAssignmentEndDate() : null;
         String employeeName = resource.map(MasterResource::getName)
                 .filter(name -> name != null && !name.isBlank())
                 .orElse(attendanceId);
 
         Long resourceId = resource.map(MasterResource::getId).orElse(null);
         QuarterLeaveCalculation calc =
-                quarterLeaveResolver.calculate(attendanceId, resourceId, projectId, organisationId, joiningDate, year, quarter,
+                quarterLeaveResolver.calculate(attendanceId, resourceId, projectId, organisationId,
+                        joiningDate, lastWorkingDate, year, quarter,
                         absentDates, halfDayDates);
 
         String designation = assignment != null ? assignment.getRole() : null;
