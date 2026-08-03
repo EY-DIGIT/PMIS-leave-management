@@ -58,4 +58,7 @@ public interface ProjectResourceRepository extends JpaRepository<ProjectResource
      *  assignment when no active one exists (e.g. inactive resources). */
     List<ProjectResource> findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(
             String resId, String projectId);
+
+    /** The most recent assignment for a resource regardless of active status — used when reactivating. */
+    Optional<ProjectResource> findTopByResourceIdOrderByAssignmentStartDateDesc(Long resourceId);
 }

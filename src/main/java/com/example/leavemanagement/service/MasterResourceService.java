@@ -373,16 +373,25 @@ public class MasterResourceService {
                 projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()).orElse(null);
 
         if (Boolean.FALSE.equals(request.active())) {
-            // Null lastDate → default to today (immediate exit).
             LocalDate exitDate = request.lastDate() != null ? request.lastDate() : LocalDate.now();
             resource.setLastDate(exitDate);
 
             if (assignment != null && !exitDate.isAfter(LocalDate.now())) {
-                // lastDate is today or in the past — deactivate immediately.
                 assignment.setActive(false);
                 assignment.setAssignmentEndDate(exitDate);
             }
-            // lastDate > today: keep assignment active — nightly scheduler will close it.
+        } else if (Boolean.TRUE.equals(request.active())) {
+            resource.setLastDate(null);
+
+            if (assignment == null) {
+                assignment = projectResourceRepository
+                        .findTopByResourceIdOrderByAssignmentStartDateDesc(resource.getId())
+                        .orElse(null);
+                if (assignment != null) {
+                    assignment.setActive(true);
+                    assignment.setAssignmentEndDate(null);
+                }
+            }
         } else {
             resource.setLastDate(request.lastDate());
         }
