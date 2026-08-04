@@ -75,7 +75,6 @@ public class ProjectResource {
     private boolean active = true;
 
     @Column(name = "assignment_start_date", nullable = false)
-    @Setter(AccessLevel.NONE)
     private LocalDate assignmentStartDate;
 
     @Column(name = "assignment_end_date")

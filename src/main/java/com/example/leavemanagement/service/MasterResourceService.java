@@ -198,9 +198,7 @@ public class MasterResourceService {
         resource.setLocation(row.location());
         resource.setCategory(row.category());
         resource.setCategoryDetails(row.categoryDetails());
-        if (resource.getDateOfJoining() == null) {
-            resource.setDateOfJoining(row.dateOfJoining()); // company joining date, set once
-        }
+        resource.setDateOfJoining(row.dateOfJoining());
         return repository.save(resource);
     }
 
@@ -216,8 +214,8 @@ public class MasterResourceService {
         }
 
         if (active.isPresent() && Objects.equals(active.get().getRole(), row.role()) && row.active()) {
-            // Same project, same role: refresh the rate card, organisationId, and replacement in place.
             ProjectResource assignment = active.get();
+            assignment.setAssignmentStartDate(row.dateOfJoining());
             assignment.setOrganisationId(organisationId);
             assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
             assignment.setReplacedByResId(row.replacedByResId());
