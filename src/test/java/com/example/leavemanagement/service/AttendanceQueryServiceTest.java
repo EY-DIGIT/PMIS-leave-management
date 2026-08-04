@@ -78,6 +78,10 @@ class AttendanceQueryServiceTest {
     @Mock
     private com.example.leavemanagement.repository.ProjectConfigRepository projectConfigRepository;
 
+    @Mock
+    private com.example.leavemanagement.repository.ActivityRepository activityRepository;
+    // ActivityRepository is injected to validate upload periods against activity date bounds
+
     // Real engine — the quarterly-settlement path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -91,7 +95,7 @@ class AttendanceQueryServiceTest {
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
-                quarterLeaveResolver, periodValidator, yearMappingRepository);
+                quarterLeaveResolver, periodValidator, yearMappingRepository, activityRepository);
     }
 
     private MultipartFile anyFile() {
@@ -320,7 +324,7 @@ class AttendanceQueryServiceTest {
 
     @Test
     void quarterlyReportRequiresProjectIdOrResourceId() {
-        assertThatThrownBy(() -> service.quarterlyReport(null, null, null, 2026, 3))
+        assertThatThrownBy(() -> service.quarterlyReport(null, null, null, null, null, 2026, 3))
                 .isInstanceOf(BadRequestException.class);
     }
 
@@ -334,8 +338,12 @@ class AttendanceQueryServiceTest {
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
         when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
                 .thenReturn(List.of());
+        when(attendanceRepository.findMinDateByResIdAndDateBetween(eq("E1"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByResIdAndDateBetween(eq("E1"), any(), any()))
+                .thenReturn(Optional.empty());
 
-        AttendanceReportResult report = service.quarterlyReport(null, "E1", null, 2026, 3);
+        AttendanceReportResult report = service.quarterlyReport(null, "E1", null, null, null, 2026, 3);
 
         assertThat(report.resources()).hasSize(1);
         assertThat(report.resources().get(0).period()).isEqualTo("Q3 2026");

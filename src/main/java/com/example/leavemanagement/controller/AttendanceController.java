@@ -1,5 +1,6 @@
 package com.example.leavemanagement.controller;
 
+import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
@@ -130,20 +131,27 @@ public class AttendanceController {
      */
     @Operation(
             summary = "Quarterly attendance report",
-            description = "Pass resourceId for one resource's summary, or projectId for the project dashboard "
-                    + "(one summary per active resource). Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, "
-                    + "Q4 Oct-Dec.")
+            description = "Returns one summary per resource for the selected quarter. "
+                    + "Filters: pass resourceId for a single resource, projectId for the project dashboard. "
+                    + "Optional milestoneId and activityId narrow the result to only resources with attendance "
+                    + "for that milestone/activity. "
+                    + "When activityId is provided, year and quarter are not required — the activity's registered "
+                    + "start/end date is used as the reporting window. "
+                    + "When activityId is absent, year and quarter are required.")
     @GetMapping("/report/quarterly")
     public AttendanceReportResult quarterlyReport(
-            @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
-                    String projectId,
-            @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
-                    String resourceId,
-            @Parameter(description = "Organisation id filter") @RequestParam(required = false)
-                    String organisationId,
-            @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
-            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam("quarter") int quarter) {
-        return attendanceQueryService.quarterlyReport(projectId, resourceId, organisationId, year, quarter);
+            @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false) String projectId,
+            @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false) String resourceId,
+            @Parameter(description = "Organisation id filter") @RequestParam(required = false) String organisationId,
+            @Parameter(description = "Milestone id filter") @RequestParam(required = false) String milestoneId,
+            @Parameter(description = "Activity id filter — replaces year/quarter with the activity's date window")
+                    @RequestParam(required = false) String activityId,
+            @Parameter(description = "Year (required when activityId is absent)", example = "2026")
+                    @RequestParam(required = false) Integer year,
+            @Parameter(description = "Quarter 1-4 (required when activityId is absent)", example = "1")
+                    @RequestParam(required = false) Integer quarter) {
+        return attendanceQueryService.quarterlyReport(
+                projectId, resourceId, organisationId, milestoneId, activityId, year, quarter);
     }
 
     /**
@@ -162,6 +170,43 @@ public class AttendanceController {
                     String resourceId,
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year) {
         return attendanceQueryService.yearlyReport(projectId, resourceId, year);
+    }
+
+    /**
+     * Period-based attendance report scoped to an activity upload window.
+     * GET /api/attendance/report/period?projectId=&startDate=&endDate=
+     */
+    @Operation(
+            summary = "Attendance report for an activity upload period",
+            description = "Returns one AttendanceReportSummary per resource active during the given "
+                    + "date range. Leave (paid/unpaid) is computed using only the uploaded period while "
+                    + "maintaining the cumulative quarter balance from prior uploads in the same quarter.")
+    @GetMapping("/report/period")
+    public AttendanceReportResult periodReport(
+            @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
+            @Parameter(description = "Organisation id filter") @RequestParam(required = false) String organisationId,
+            @Parameter(description = "Period start date", example = "2026-01-09")
+                    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Period end date", example = "2026-02-08")
+                    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+        return attendanceQueryService.periodReport(projectId, organisationId, startDate, endDate);
+    }
+
+    @Operation(
+            summary = "Activity attendance report",
+            description = "Returns the attendance report for the given project → milestone → activity. "
+                    + "Only resources whose attendance was uploaded for this activity appear in the report. "
+                    + "The report period expands automatically as more attendance is uploaded: "
+                    + "reportStartDate and reportEndDate reflect the actual min/max uploaded dates "
+                    + "for the activity within the selected quarter, not the fixed quarter boundaries.")
+    @GetMapping("/report/activity")
+    public ActivityAttendanceReportResult activityReport(
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Milestone id") @RequestParam String milestoneId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId,
+            @Parameter(description = "Year", example = "2026") @RequestParam int year,
+            @Parameter(description = "Quarter (1-4)", example = "1") @RequestParam int quarter) {
+        return attendanceQueryService.activityReport(projectId, milestoneId, activityId, year, quarter);
     }
 
     /**

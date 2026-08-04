@@ -2,11 +2,13 @@ package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.ResourceCostResult;
+import java.time.LocalDate;
 import java.util.List;
 import com.example.leavemanagement.service.AttendanceQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -94,5 +96,26 @@ public class ResourceCostController {
                     String resourceId,
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year) {
         return attendanceQueryService.yearlyCostReport(projectId, resourceId, year);
+    }
+
+    /**
+     * Cost report scoped to an activity upload period (arbitrary date range).
+     * Per-day rate is computed per-month-segment so cross-month periods are priced correctly.
+     * GET /api/attendance/cost/period?projectId=&startDate=&endDate=
+     */
+    @Operation(
+            summary = "Resource cost report for an activity upload period",
+            description = "Returns one ResourceCostSummary per resource active during the given date range. "
+                    + "Per-day rate = monthlyRate / calendarDaysInMonth for each month segment within the period. "
+                    + "Unpaid leave is computed using the cumulative quarter balance from prior uploads.")
+    @GetMapping("/period")
+    public ResourceCostResult periodCostReport(
+            @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
+            @Parameter(description = "Organisation id filter") @RequestParam(required = false) String organisationId,
+            @Parameter(description = "Period start date", example = "2026-01-09")
+                    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @Parameter(description = "Period end date", example = "2026-02-08")
+                    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+        return attendanceQueryService.periodCostReport(projectId, organisationId, startDate, endDate);
     }
 }

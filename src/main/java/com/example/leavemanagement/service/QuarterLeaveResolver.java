@@ -257,6 +257,81 @@ public class QuarterLeaveResolver {
         return (int) Math.round(prevCalc.lapsedLeaveDays());
     }
 
+    /**
+     * Computes the paid/unpaid leave breakdown for one resource scoped to an arbitrary
+     * attendance period (e.g. an activity upload window like 09-Jan-2026 to 08-Feb-2026).
+     *
+     * <p>The quarter's full leave quota (with designation-chain deduction) is established first,
+     * then the paid leaves already consumed in the same quarter before {@code periodStart} are
+     * subtracted so the period inherits the correct cumulative balance. The policy is then applied
+     * to only the dates within {@code [periodStart, periodEnd]}.
+     */
+    public QuarterLeaveCalculation calculateForPeriod(
+            String resId,
+            Long resourceId,
+            String projectId,
+            String organisationId,
+            LocalDate joiningDate,
+            LocalDate periodStart,
+            LocalDate periodEnd,
+            Set<LocalDate> absentInPeriod,
+            Set<LocalDate> halfDayInPeriod) {
+
+        int cycleDay = resolveCycleDay(projectId, organisationId);
+        int year = periodStart.getYear();
+        int quarter = (periodStart.getMonthValue() - 1) / 3 + 1;
+        LocalDate quarterStart = quarterStart(year, quarter, cycleDay);
+        LocalDate quarterEnd = quarterEnd(year, quarter, cycleDay);
+
+        LocalDate calcEnd = periodEnd.isAfter(quarterEnd) ? quarterEnd : periodEnd;
+
+        Set<LocalDate> quarterHolidays = holidaysBetween(quarterStart, quarterEnd);
+        Set<LocalDate> periodHolidays = holidaysBetween(periodStart, calcEnd);
+
+        Optional<LeavePolicyResponse> leavePolicy =
+                projectId == null ? Optional.empty() : leavePolicyClient.getLeavePolicy(projectId);
+        int maxLeaves = resolveMaxLeaves(projectId, leavePolicy);
+
+        List<ProjectResource> predecessorChain =
+                (resId != null && projectId != null)
+                        ? findPredecessorChain(resId, projectId, quarterStart, quarterEnd)
+                        : List.of();
+        double effectiveMaxLeaves = predecessorChain.isEmpty()
+                ? maxLeaves
+                : computeRemainingFromChain(predecessorChain, quarterStart, quarterEnd, quarterHolidays, maxLeaves);
+
+        boolean carryForwardAllowed =
+                leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
+        int carriedForwardDays = (resourceId != null && carryForwardAllowed)
+                ? resolveCarriedForwardDays(resourceId, year, quarter, joiningDate, maxLeaves, cycleDay)
+                : 0;
+        double totalQuota = effectiveMaxLeaves + carriedForwardDays;
+
+        if (resourceId != null && periodStart.isAfter(quarterStart)) {
+            List<Attendance> priorRows = attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                    resourceId, quarterStart, periodStart.minusDays(1));
+            Set<LocalDate> priorAbsent = priorRows.stream()
+                    .filter(a -> a.getStatus() == AttendanceStatus.A)
+                    .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
+            Set<LocalDate> priorHalfDay = priorRows.stream()
+                    .filter(a -> a.getStatus() == AttendanceStatus.HD)
+                    .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
+            Set<LocalDate> priorHolidays = holidaysBetween(quarterStart, periodStart.minusDays(1));
+            QuarterLeaveCalculation priorCalc = policy.compute(
+                    quarterStart, periodStart.minusDays(1), null,
+                    priorAbsent, priorHalfDay, priorHolidays, totalQuota, 0);
+            totalQuota = Math.max(0.0, totalQuota - priorCalc.paidLeaveDays());
+        }
+
+        Set<LocalDate> absentInCalc = absentInPeriod.stream()
+                .filter(d -> !d.isAfter(calcEnd)).collect(Collectors.toSet());
+        Set<LocalDate> halfDayInCalc = halfDayInPeriod.stream()
+                .filter(d -> !d.isAfter(calcEnd)).collect(Collectors.toSet());
+
+        return policy.compute(periodStart, calcEnd, null,
+                absentInCalc, halfDayInCalc, periodHolidays, totalQuota, 0);
+    }
+
     private Set<LocalDate> holidaysBetween(LocalDate start, LocalDate end) {
         return holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(start, end).stream()
                 .map(PublicHoliday::getHolidayDate)

@@ -1,6 +1,7 @@
 package com.example.leavemanagement.repository;
 
 import com.example.leavemanagement.entity.Attendance;
+import com.example.leavemanagement.entity.MasterResource;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -43,6 +44,69 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
     @Query("SELECT COUNT(a) > 0 FROM Attendance a WHERE a.resource.resId = :resId AND a.attendanceDate BETWEEN :start AND :end")
     boolean existsByResIdAndDateBetween(
             @Param("resId") String resId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.projectId = :projectId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMinDateByProjectIdAndDateBetween(
+            @Param("projectId") String projectId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MAX(a.attendanceDate) FROM Attendance a WHERE a.projectId = :projectId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMaxDateByProjectIdAndDateBetween(
+            @Param("projectId") String projectId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.resource.resId = :resId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMinDateByResIdAndDateBetween(
+            @Param("resId") String resId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MAX(a.attendanceDate) FROM Attendance a WHERE a.resource.resId = :resId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMaxDateByResIdAndDateBetween(
+            @Param("resId") String resId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.activityId = :activityId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMinDateByActivityIdAndDateBetween(
+            @Param("activityId") String activityId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MAX(a.attendanceDate) FROM Attendance a WHERE a.activityId = :activityId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMaxDateByActivityIdAndDateBetween(
+            @Param("activityId") String activityId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT DISTINCT a.resource FROM Attendance a WHERE a.activityId = :activityId AND a.attendanceDate BETWEEN :start AND :end")
+    List<MasterResource> findDistinctResourcesByActivityIdAndDateBetween(
+            @Param("activityId") String activityId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.projectId = :projectId AND a.milestoneId = :milestoneId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMinDateByProjectIdAndMilestoneIdAndDateBetween(
+            @Param("projectId") String projectId,
+            @Param("milestoneId") String milestoneId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT MAX(a.attendanceDate) FROM Attendance a WHERE a.projectId = :projectId AND a.milestoneId = :milestoneId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMaxDateByProjectIdAndMilestoneIdAndDateBetween(
+            @Param("projectId") String projectId,
+            @Param("milestoneId") String milestoneId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT DISTINCT a.resource FROM Attendance a WHERE a.projectId = :projectId AND a.milestoneId = :milestoneId AND a.attendanceDate BETWEEN :start AND :end")
+    List<MasterResource> findDistinctResourcesByProjectIdAndMilestoneIdAndDateBetween(
+            @Param("projectId") String projectId,
+            @Param("milestoneId") String milestoneId,
             @Param("start") LocalDate start,
             @Param("end") LocalDate end);
 }
