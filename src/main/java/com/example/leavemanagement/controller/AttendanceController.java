@@ -4,7 +4,6 @@ import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
-import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
 import com.example.leavemanagement.dto.RelaxationEligibilityResponse;
 import com.example.leavemanagement.entity.LeaveRelaxation;
@@ -16,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import java.time.LocalDate;
 import java.time.LocalDate;
 import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -126,35 +124,6 @@ public class AttendanceController {
     }
 
     /**
-     * Quarterly report: one resource (resourceId) or the whole project dashboard (projectId).
-     * GET /api/attendance/report/quarterly?projectId=&resourceId=&year=&quarter=
-     */
-    @Operation(
-            summary = "Quarterly attendance report",
-            description = "Returns one summary per resource for the selected quarter. "
-                    + "Filters: pass resourceId for a single resource, projectId for the project dashboard. "
-                    + "Optional milestoneId and activityId narrow the result to only resources with attendance "
-                    + "for that milestone/activity. "
-                    + "When activityId is provided, year and quarter are not required — the activity's registered "
-                    + "start/end date is used as the reporting window. "
-                    + "When activityId is absent, year and quarter are required.")
-    @GetMapping("/report/quarterly")
-    public AttendanceReportResult quarterlyReport(
-            @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false) String projectId,
-            @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false) String resourceId,
-            @Parameter(description = "Organisation id filter") @RequestParam(required = false) String organisationId,
-            @Parameter(description = "Milestone id filter") @RequestParam(required = false) String milestoneId,
-            @Parameter(description = "Activity id filter — replaces year/quarter with the activity's date window")
-                    @RequestParam(required = false) String activityId,
-            @Parameter(description = "Year (required when activityId is absent)", example = "2026")
-                    @RequestParam(required = false) Integer year,
-            @Parameter(description = "Quarter 1-4 (required when activityId is absent)", example = "1")
-                    @RequestParam(required = false) Integer quarter) {
-        return attendanceQueryService.quarterlyReport(
-                projectId, resourceId, organisationId, milestoneId, activityId, year, quarter);
-    }
-
-    /**
      * Yearly report: one resource (resourceId) or the whole project dashboard (projectId).
      * GET /api/attendance/report/yearly?projectId=&resourceId=&year=
      */
@@ -196,95 +165,65 @@ public class AttendanceController {
             summary = "Activity attendance report",
             description = "Returns the attendance report for the given project → milestone → activity. "
                     + "Only resources whose attendance was uploaded for this activity appear in the report. "
-                    + "The report period expands automatically as more attendance is uploaded: "
-                    + "reportStartDate and reportEndDate reflect the actual min/max uploaded dates "
-                    + "for the activity within the selected quarter, not the fixed quarter boundaries.")
+                    + "The window is the activity's own start/end date (fetched live from PMIS); the report "
+                    + "period (reportStartDate/reportEndDate) expands automatically as more attendance is "
+                    + "uploaded, up to the activity end date.")
     @GetMapping("/report/activity")
     public ActivityAttendanceReportResult activityReport(
             @Parameter(description = "Project id") @RequestParam String projectId,
             @Parameter(description = "Milestone id") @RequestParam String milestoneId,
-            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId,
-            @Parameter(description = "Year", example = "2026") @RequestParam int year,
-            @Parameter(description = "Quarter (1-4)", example = "1") @RequestParam int quarter) {
-        return attendanceQueryService.activityReport(projectId, milestoneId, activityId, year, quarter);
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
+        return attendanceQueryService.activityReport(projectId, milestoneId, activityId);
     }
 
     /**
-     * Quarterly leave-policy settlement (UIDAI 5.24.1) over stored attendance.
-     * GET /api/attendance/quarterly-leave?year=2026&quarter=2
+     * Per-employee activity leave dates: paid leave, half-day, and sandwich-charged dates.
+     * GET /api/attendance/leave-dates?resourceId=E1&activityId=ACT-001
      */
     @Operation(
-            summary = "Quarterly leave-policy settlement (UIDAI 5.24.1)",
-            description = "Applies the policy over the quarter's stored attendance: up to 6 paid leave days "
-                    + "(pro-rata for mid-quarter joiners), the rest unpaid, with sandwich-leave weekend/holiday "
-                    + "charging. Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec. Pass "
-                    + "projectId to restrict to resources uploaded under that project.")
-    @GetMapping("/quarterly-leave")
-    public QuarterLeaveReport quarterlyLeave(
-            @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
-            @Parameter(description = "Quarter (1-4)", example = "2") @RequestParam("quarter") int quarter,
-            @Parameter(description = "Restrict to this project id") @RequestParam(required = false)
-                    String projectId) {
-        return attendanceQueryService.quarterlySettlement(year, quarter, projectId);
-    }
-
-    /**
-     * Per-employee quarterly leave dates: paid leave, half-day, and sandwich-charged dates.
-     * GET /api/attendance/leave-dates?resourceId=E1&year=2026&quarter=3
-     */
-    @Operation(
-            summary = "Quarterly leave dates for one employee",
+            summary = "Activity leave dates for one employee",
             description = "Returns the actual calendar dates of paid leaves, half-days, unpaid leaves, and "
-                    + "sandwich-charged non-working days for the given resource and quarter. Relaxation already "
-                    + "applied is reflected in the scalar counters; the date lists are not affected by relaxation "
-                    + "(sandwich and unpaid dates are still the raw policy output). "
-                    + "Calendar quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec.")
+                    + "sandwich-charged non-working days for the given resource over the activity window. "
+                    + "Relaxation already applied is reflected in the scalar counters.")
     @GetMapping("/leave-dates")
     public EmployeeLeaveDetail leaveDates(
             @Parameter(description = "res_id of the employee") @RequestParam String resourceId,
-            @Parameter(description = "Year", example = "2026") @RequestParam int year,
-            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId,
             @Parameter(description = "Restrict to this project id") @RequestParam(required = false)
                     String projectId) {
-        return leaveReportService.employeeDetail(resourceId, year, quarter, projectId);
+        return leaveReportService.employeeDetail(resourceId, activityId, projectId);
     }
 
     /**
      * Returns which unpaid leave dates are still eligible for relaxation approval.
-     * GET /api/attendance/quarterly-relaxation/eligible-dates
+     * GET /api/attendance/relaxation/eligible-dates
      */
     @Operation(
             summary = "Eligible unpaid leave dates for relaxation",
-            description = "Returns all unpaid leave dates for the given resource and quarter, split "
+            description = "Returns all unpaid leave dates for the given resource within the activity, split "
                     + "into already-approved dates and dates still available for relaxation selection.")
-    @GetMapping("/quarterly-relaxation/eligible-dates")
+    @GetMapping("/relaxation/eligible-dates")
     public RelaxationEligibilityResponse eligibleRelaxationDates(
             @Parameter(description = "res_id of the resource") @RequestParam String resourceId,
             @Parameter(description = "Project id") @RequestParam String projectId,
-            @Parameter(description = "Year", example = "2026") @RequestParam int year,
-            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter) {
-        return leaveReportService.eligibleRelaxationDates(resourceId, projectId, year, quarter);
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
+        return leaveReportService.eligibleRelaxationDates(resourceId, projectId, activityId);
     }
 
     /**
-     * Records UIDAI's final leave-relaxation decision for one resource's quarter.
-     * POST /api/attendance/quarterly-relaxation (multipart/form-data)
-     * Pass each selected unpaid leave date as a separate {@code relaxationDates} value (ISO-8601,
-     * e.g. 2026-02-20). An optional evidence file may be attached as the "attachment" part.
+     * Records UIDAI's final leave-relaxation decision for one resource within an activity.
+     * POST /api/attendance/relaxation (multipart/form-data)
      */
     @Operation(
-            summary = "Record a quarterly leave-relaxation approval",
+            summary = "Record an activity leave-relaxation approval",
             description = "Approves the specified unpaid leave dates as relaxation leave. Each date must be "
-                    + "an existing unpaid leave date for this resource's quarter and must not have been "
-                    + "previously approved. Per-day cost = monthlyRate / calendar-days-in-that-month, so "
-                    + "dates from different months are priced independently. Returns the recalculated "
-                    + "quarterly settlement showing the updated relaxationLeave and unpaidLeave.")
-    @PostMapping(value = "/quarterly-relaxation", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public EmployeeLeaveDetail quarterlyRelaxation(
+                    + "an existing unpaid leave date for this resource within the activity and must not have "
+                    + "been previously approved. Per-day cost = monthlyRate / calendar-days-in-that-month.")
+    @PostMapping(value = "/relaxation", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public EmployeeLeaveDetail relaxation(
             @Parameter(description = "res_id of the resource") @RequestParam String resourceId,
             @Parameter(description = "Project id") @RequestParam String projectId,
-            @Parameter(description = "Year", example = "2026") @RequestParam int year,
-            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId,
             @Parameter(description = "Unpaid leave dates to approve (ISO-8601, e.g. 2026-02-20); "
                             + "repeat this parameter for multiple dates")
                     @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) List<LocalDate> relaxationDates,
@@ -292,23 +231,22 @@ public class AttendanceController {
             @Parameter(description = "Evidence file (PDF, image, etc.)")
                     @RequestPart(value = "attachment", required = false) MultipartFile attachment) {
         QuarterlyRelaxationRequest request =
-                new QuarterlyRelaxationRequest(resourceId, projectId, year, quarter, relaxationDates, remarks);
+                new QuarterlyRelaxationRequest(resourceId, projectId, activityId, relaxationDates, remarks);
         return leaveReportService.applyQuarterlyRelaxation(request, attachment);
     }
 
     /**
      * Downloads the evidence attachment for a recorded relaxation.
-     * GET /api/attendance/quarterly-relaxation/attachment?resourceId=&projectId=&year=&quarter=
+     * GET /api/attendance/relaxation/attachment?resourceId=&projectId=&activityId=
      */
     @Operation(summary = "Download the evidence attachment for a relaxation record")
-    @GetMapping("/quarterly-relaxation/attachment")
+    @GetMapping("/relaxation/attachment")
     public ResponseEntity<byte[]> relaxationAttachment(
             @Parameter(description = "res_id of the resource") @RequestParam String resourceId,
             @Parameter(description = "Project id") @RequestParam String projectId,
-            @Parameter(description = "Year", example = "2026") @RequestParam int year,
-            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam int quarter) {
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
         LeaveRelaxation relaxation =
-                leaveReportService.getRelaxationAttachment(resourceId, projectId, year, quarter);
+                leaveReportService.getRelaxationAttachment(resourceId, projectId, activityId);
         String contentType = relaxation.getAttachmentContentType() != null
                 ? relaxation.getAttachmentContentType()
                 : MediaType.APPLICATION_OCTET_STREAM_VALUE;

@@ -1,7 +1,9 @@
 package com.example.leavemanagement.service;
 
+import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportSummary;
 import com.example.leavemanagement.dto.AttendanceReportTotals;
@@ -10,11 +12,9 @@ import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
-import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.ResourceCostResult;
 import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.dto.ResourceCostTotals;
-import com.example.leavemanagement.dto.ResourceQuarterSettlement;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.LeaveRelaxation;
@@ -24,8 +24,6 @@ import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.exception.AttendanceValidationException;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
-import com.example.leavemanagement.entity.Activity;
-import com.example.leavemanagement.repository.ActivityRepository;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.LeaveRelaxationRepository;
 import com.example.leavemanagement.repository.MasterResourceRepository;
@@ -79,7 +77,7 @@ public class AttendanceQueryService {
     private final QuarterLeaveResolver quarterLeaveResolver;
     private final AttendancePeriodValidator periodValidator;
     private final ProjectYearMappingRepository yearMappingRepository;
-    private final ActivityRepository activityRepository;
+    private final ActivityDetailsClient activityDetailsClient;
 
     public AttendanceQueryService(
             AttendanceExcelParser parser,
@@ -92,7 +90,7 @@ public class AttendanceQueryService {
             QuarterLeaveResolver quarterLeaveResolver,
             AttendancePeriodValidator periodValidator,
             ProjectYearMappingRepository yearMappingRepository,
-            ActivityRepository activityRepository) {
+            ActivityDetailsClient activityDetailsClient) {
         this.parser = parser;
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
@@ -103,7 +101,7 @@ public class AttendanceQueryService {
         this.quarterLeaveResolver = quarterLeaveResolver;
         this.periodValidator = periodValidator;
         this.yearMappingRepository = yearMappingRepository;
-        this.activityRepository = activityRepository;
+        this.activityDetailsClient = activityDetailsClient;
     }
 
     /**
@@ -124,15 +122,15 @@ public class AttendanceQueryService {
             String rateYear,
             MultipartFile file) {
         validatePeriod(startDate, endDate);
-        Activity activity = (activityId != null && !activityId.isBlank())
-                ? activityRepository.findByActivityId(activityId).orElse(null)
+        ActivityDetailsResponse activity = (activityId != null && !activityId.isBlank())
+                ? activityDetailsClient.getActivityDetails(activityId).orElse(null)
                 : null;
-        if (activity != null) {
-            if (startDate.isBefore(activity.getStartDate()) || endDate.isAfter(activity.getEndDate())) {
+        if (activity != null && activity.startDate() != null && activity.endDate() != null) {
+            if (startDate.isBefore(activity.startDate()) || endDate.isAfter(activity.endDate())) {
                 throw new BadRequestException(
                         "Upload period " + startDate + " to " + endDate
                                 + " is outside the activity date range "
-                                + activity.getStartDate() + " to " + activity.getEndDate() + ".");
+                                + activity.startDate() + " to " + activity.endDate() + ".");
             }
         }
         List<EmployeeAttendanceByDate> parsed = parser.parse(file, startDate, endDate);
@@ -140,7 +138,7 @@ public class AttendanceQueryService {
                 validateResourcesAndFetchLeavePolicies(attendanceIds(parsed), projectId);
 
         if (activity != null) {
-            validateActivityResources(activity, startDate, endDate, parsed, projectId);
+            validateActivityResources(activity, activityId, startDate, endDate, parsed, projectId);
         }
 
         int[] thresholds = resolveThresholds(projectId, leavePolicies.get(projectId));
@@ -198,8 +196,7 @@ public class AttendanceQueryService {
 
     /**
      * Full/half-day minute thresholds: prefers the real leave policy's {@code fullDay}/{@code
-     * halfDay} (hours), falls back to the (largely unmaintained) {@link ProjectConfig} table, then
-     * to an 8h/4h default.
+     * halfDay} (hours), otherwise an 8h/4h default.
      */
     private int[] resolveThresholds(String projectId, LeavePolicyResponse leavePolicy) {
         if (leavePolicy != null && leavePolicy.fullDay() != null && leavePolicy.halfDay() != null) {
@@ -263,23 +260,29 @@ public class AttendanceQueryService {
     }
 
     /**
-     * Validates that the uploaded resources match the activity's designation requirements.
+     * Validates the uploaded resources against the activity's planned configuration, fetched live
+     * from the projects service (the single source of truth). The {@code resources} array defines
+     * the required designation, quantity, and duration per designation.
      *
-     * <p>Two levels of validation:
+     * <p>Levels of validation:
      * <ol>
-     *   <li>Per-resource: each resource must have a designation that is configured for the activity,
-     *       and must have been active during the upload period.
-     *   <li>Count: per-designation uploaded count must not exceed the configured count; total
+     *   <li>Per-resource: designation must be configured for the activity; the resource must have
+     *       been active during the upload period.
+     *   <li>Duration: the upload period must fall within the designation's planned span
+     *       (activity start + duration months).
+     *   <li>Count: per-designation uploaded count must not exceed the configured quantity; total
      *       uploaded must not exceed total configured.
      * </ol>
-     * If no designation requirements are configured for the activity, only individual resource
-     * checks (period overlap) are performed.
+     * If the projects service returns no configuration, only the per-resource period-overlap checks
+     * are performed.
      */
     private void validateActivityResources(
-            Activity activity, LocalDate startDate, LocalDate endDate,
+            ActivityDetailsResponse details, String activityId, LocalDate startDate, LocalDate endDate,
             List<EmployeeAttendanceByDate> parsed, String projectId) {
-        Map<String, Integer> required = activity.getDesignationRequirements();
-        boolean hasRequirements = required != null && !required.isEmpty();
+        String activityLabel = details.activityName() != null ? details.activityName() : activityId;
+        boolean hasRequirements = details.hasResources();
+        Map<String, Integer> required = hasRequirements ? details.requiredByDesignation() : Map.of();
+        Map<String, Double> durations = hasRequirements ? details.durationByDesignation() : Map.of();
 
         List<String> resourceErrors = new ArrayList<>();
         Map<String, Integer> uploadedByDesignation = new LinkedHashMap<>();
@@ -309,8 +312,21 @@ public class AttendanceQueryService {
             if (hasRequirements && (designation == null || !required.containsKey(designation))) {
                 resourceErrors.add("Resource " + employee.attendanceId()
                         + " has designation '" + designation
-                        + "' which is not configured for activity '" + activity.getActivityName() + "'.");
+                        + "' which is not configured for activity '" + activityLabel + "'.");
                 continue;
+            }
+
+            Double duration = designation != null ? durations.get(designation) : null;
+            if (duration != null && details.startDate() != null) {
+                LocalDate plannedEnd = plannedEndDate(details.startDate(), duration);
+                if (endDate.isAfter(plannedEnd)) {
+                    resourceErrors.add("Resource " + employee.attendanceId()
+                            + " (designation '" + designation + "') has a planned duration of "
+                            + duration + " month(s) from " + details.startDate()
+                            + "; the attendance period end date " + endDate
+                            + " is beyond the planned end " + plannedEnd + ".");
+                    continue;
+                }
             }
 
             if (designation != null) {
@@ -326,7 +342,7 @@ public class AttendanceQueryService {
             return;
         }
 
-        int totalRequired = required.values().stream().mapToInt(Integer::intValue).sum();
+        int totalRequired = details.totalRequired();
         int totalUploaded = parsed.size();
 
         List<String> countErrors = new ArrayList<>();
@@ -342,7 +358,7 @@ public class AttendanceQueryService {
 
         if (!countErrors.isEmpty() || totalUploaded > totalRequired) {
             StringBuilder msg = new StringBuilder();
-            msg.append("Attendance upload failed.\n\nActivity: ").append(activity.getActivityName()).append("\n\n");
+            msg.append("Attendance upload failed.\n\nActivity: ").append(activityLabel).append("\n\n");
             for (String e : countErrors) {
                 msg.append(e).append("\n\n");
             }
@@ -397,97 +413,6 @@ public class AttendanceQueryService {
     }
 
     @Transactional(readOnly = true)
-    public AttendanceReportResult quarterlyReport(
-            String projectId, String resourceId, String organisationId,
-            String milestoneId, String activityId, Integer year, Integer quarter) {
-
-        boolean hasActivity  = activityId  != null && !activityId.isBlank();
-        boolean hasMilestone = milestoneId != null && !milestoneId.isBlank();
-
-        if (hasActivity) {
-            Activity activity = activityRepository.findByActivityId(activityId)
-                    .orElseThrow(() -> new NotFoundException("No activity registered with id '" + activityId + "'"));
-            LocalDate aStart = activity.getStartDate();
-            LocalDate aEnd   = activity.getEndDate();
-            LocalDate reportStart = attendanceRepository
-                    .findMinDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aStart);
-            LocalDate reportEnd = attendanceRepository
-                    .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aEnd);
-            int q = (aStart.getMonthValue() - 1) / 3 + 1;
-            String periodLabel = "Q" + q + " " + aStart.getYear();
-            int leaveLimit = resolveLeaveLimit(projectId, 3);
-            List<AttendanceReportSummary> rows = buildRowsFromResources(
-                    attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(
-                            activityId, reportStart, reportEnd),
-                    projectId, organisationId, reportStart, reportEnd, periodLabel, leaveLimit);
-            return toResult(periodLabel, reportStart, reportEnd, rows);
-        }
-
-        if (year == null || quarter == null) {
-            throw new BadRequestException("year and quarter are required when activityId is not provided");
-        }
-        if (quarter < 1 || quarter > 4) {
-            throw new BadRequestException("quarter must be between 1 and 4");
-        }
-
-        String periodLabel = "Q" + quarter + " " + year;
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, organisationId);
-        LocalDate qStart = quarterLeaveResolver.quarterStart(year, quarter, cycleDay);
-        LocalDate qEnd   = quarterLeaveResolver.quarterEnd(year, quarter, cycleDay);
-
-        if (hasMilestone) {
-            if (projectId == null || projectId.isBlank()) {
-                throw new BadRequestException("projectId is required when filtering by milestoneId");
-            }
-            LocalDate reportStart = attendanceRepository
-                    .findMinDateByProjectIdAndMilestoneIdAndDateBetween(projectId, milestoneId, qStart, qEnd).orElse(qStart);
-            LocalDate reportEnd = attendanceRepository
-                    .findMaxDateByProjectIdAndMilestoneIdAndDateBetween(projectId, milestoneId, qStart, qEnd).orElse(qEnd);
-            int leaveLimit = resolveLeaveLimit(projectId, 3);
-            List<AttendanceReportSummary> rows = buildRowsFromResources(
-                    attendanceRepository.findDistinctResourcesByProjectIdAndMilestoneIdAndDateBetween(
-                            projectId, milestoneId, reportStart, reportEnd),
-                    projectId, organisationId, reportStart, reportEnd, periodLabel, leaveLimit);
-            return toResult(periodLabel, reportStart, reportEnd, rows);
-        }
-
-        LocalDate reportStart;
-        LocalDate reportEnd;
-        if (resourceId != null && !resourceId.isBlank()) {
-            reportStart = attendanceRepository.findMinDateByResIdAndDateBetween(resourceId, qStart, qEnd).orElse(qStart);
-            reportEnd   = attendanceRepository.findMaxDateByResIdAndDateBetween(resourceId, qStart, qEnd).orElse(qEnd);
-        } else {
-            if (projectId == null || projectId.isBlank()) {
-                throw new BadRequestException("projectId or resourceId is required");
-            }
-            reportStart = attendanceRepository.findMinDateByProjectIdAndDateBetween(projectId, qStart, qEnd).orElse(qStart);
-            reportEnd   = attendanceRepository.findMaxDateByProjectIdAndDateBetween(projectId, qStart, qEnd).orElse(qEnd);
-        }
-        return scopedReport(projectId, resourceId, organisationId, reportStart, reportEnd, periodLabel, 3);
-    }
-
-    private List<AttendanceReportSummary> buildRowsFromResources(
-            List<MasterResource> resources, String projectId, String organisationId,
-            LocalDate reportStart, LocalDate reportEnd, String periodLabel, int leaveLimit) {
-        return resources.stream()
-                .map(resource -> {
-                    ProjectResource assignment = resolveAssignmentForProject(resource.getResId(), projectId);
-                    if (organisationId != null && !organisationId.isBlank()
-                            && (assignment == null || !organisationId.equals(assignment.getOrganisationId()))) {
-                        return null;
-                    }
-                    String designation    = assignment != null ? assignment.getRole() : null;
-                    LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
-                    boolean active        = assignment != null && assignment.isActive();
-                    LocalDate lastDate    = assignment != null ? assignment.getAssignmentEndDate() : null;
-                    return buildSummary(resource, projectId, reportStart, reportEnd, periodLabel,
-                            leaveLimit, designation, joiningDate, active, lastDate);
-                })
-                .filter(s -> s != null)
-                .toList();
-    }
-
-    @Transactional(readOnly = true)
     public AttendanceReportResult yearlyReport(String projectId, String resourceId, int year) {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
@@ -499,31 +424,29 @@ public class AttendanceQueryService {
 
     @Transactional(readOnly = true)
     public ActivityAttendanceReportResult activityReport(
-            String projectId, String milestoneId, String activityId, int year, int quarter) {
-        if (quarter < 1 || quarter > 4) {
-            throw new BadRequestException("quarter must be between 1 and 4");
+            String projectId, String milestoneId, String activityId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
         }
-        Activity activity = activityRepository.findByActivityId(activityId)
-                .orElseThrow(() -> new NotFoundException("No activity registered with id '" + activityId + "'"));
 
-        int configuredCount = activity.getDesignationRequirements() == null ? 0
-                : activity.getDesignationRequirements().values().stream().mapToInt(Integer::intValue).sum();
-
-        String periodLabel = "Q" + quarter + " " + year;
-        String organisationId = activity.getOrganisationId();
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, organisationId);
-        LocalDate qStart = quarterLeaveResolver.quarterStart(year, quarter, cycleDay);
-        LocalDate qEnd   = quarterLeaveResolver.quarterEnd(year, quarter, cycleDay);
+        LocalDate aStart = activity.startDate();
+        LocalDate aEnd   = activity.endDate();
+        int configuredCount = activity.totalRequired();
+        String activityName = activity.activityName() != null ? activity.activityName() : activityId;
+        String periodLabel = aStart + " to " + aEnd;
 
         LocalDate reportStart = attendanceRepository
-                .findMinDateByActivityIdAndDateBetween(activityId, qStart, qEnd).orElse(qStart);
+                .findMinDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aStart);
         LocalDate reportEnd = attendanceRepository
-                .findMaxDateByActivityIdAndDateBetween(activityId, qStart, qEnd).orElse(qEnd);
+                .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aEnd);
 
         List<MasterResource> uploadedResources = attendanceRepository
                 .findDistinctResourcesByActivityIdAndDateBetween(activityId, reportStart, reportEnd);
 
-        int leaveLimit = resolveLeaveLimit(projectId, 3);
+        int months = Math.max(1, (int) Math.round(monthsBetween(aStart, aEnd)));
+        int leaveLimit = resolveLeaveLimit(projectId, months);
 
         List<AttendanceReportSummary> rows = uploadedResources.stream()
                 .map(resource -> {
@@ -539,8 +462,9 @@ public class AttendanceQueryService {
 
         int calendarDays = (int) (reportEnd.toEpochDay() - reportStart.toEpochDay()) + 1;
         return new ActivityAttendanceReportResult(
-                activityId, activity.getActivityName(), projectId, milestoneId,
-                periodLabel, reportStart, reportEnd, calendarDays,
+                activityId, activityName, projectId, milestoneId,
+                periodLabel, aStart, aEnd,
+                reportStart, reportEnd, calendarDays,
                 configuredCount, uploadedResources.size(),
                 buildAttendanceTotals(rows, calendarDays), rows);
     }
@@ -738,18 +662,14 @@ public class AttendanceQueryService {
     @Transactional(readOnly = true)
     public List<MonthlyResourceCost> monthlyCostReport(String projectId, int year, int month) {
         validateMonthAndYear(year, month);
-        String orgId = projectResourceRepository.findByProjectId(projectId)
-                .stream().findFirst().map(ProjectResource::getOrganisationId).orElse(null);
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, orgId);
-        LocalDate fromDate = LocalDate.of(year, month, cycleDay);
-        LocalDate toDate = fromDate.plusMonths(1).minusDays(1);
+        LocalDate fromDate = LocalDate.of(year, month, 1);
+        LocalDate toDate = fromDate.withDayOfMonth(fromDate.lengthOfMonth());
         String periodLabel = fromDate.format(MONTH_YEAR);
         periodValidator.validate(fromDate, toDate, projectId, null, periodLabel);
-        int quarter = (month - 1) / 3 + 1;
         return latestAssignmentsActiveDuring(projectId, fromDate, toDate).stream()
                 .map(ProjectResource::getResource)
                 .map(resource -> {
-                    QuarterLeaveCalculation calc = computeQuarterlyLeave(resource, projectId, year, quarter);
+                    QuarterLeaveCalculation calc = leaveForWindow(resource, projectId, fromDate, toDate);
                     return buildMonthlyCost(resource, projectId, fromDate, toDate, periodLabel,
                             new HashSet<>(calc.unpaidLeaveDates()),
                             new HashSet<>(calc.unpaidHalfDayDates()));
@@ -768,29 +688,23 @@ public class AttendanceQueryService {
                 .findByResourceIdAndActiveTrue(resource.getId())
                 .map(ProjectResource::getProjectId)
                 .orElse(null);
-        String orgId = projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId())
-                .map(ProjectResource::getOrganisationId).orElse(null);
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, orgId);
-        LocalDate fromDate = LocalDate.of(year, month, cycleDay);
-        LocalDate toDate = fromDate.plusMonths(1).minusDays(1);
+        LocalDate fromDate = LocalDate.of(year, month, 1);
+        LocalDate toDate = fromDate.withDayOfMonth(fromDate.lengthOfMonth());
         periodValidator.validate(fromDate, toDate, projectId, resourceId, fromDate.format(MONTH_YEAR));
-        int quarter = (month - 1) / 3 + 1;
-        QuarterLeaveCalculation calc = computeQuarterlyLeave(resource, projectId, year, quarter);
+        QuarterLeaveCalculation calc = leaveForWindow(resource, projectId, fromDate, toDate);
         return buildMonthlyCost(resource, projectId, fromDate, toDate, fromDate.format(MONTH_YEAR),
                 new HashSet<>(calc.unpaidLeaveDates()), new HashSet<>(calc.unpaidHalfDayDates()));
     }
 
-    /**
-     * Quarterly cost: pass {@code resourceId} for a single resource's summary, or {@code
-     * projectId} for the project dashboard (one summary per active resource).
-     */
+    /** Resource cost for a single activity, scoped to the activity's execution window. */
     @Transactional(readOnly = true)
-    public ResourceCostResult quarterlyCostReport(String projectId, String resourceId, int year, int quarter) {
-        if (quarter < 1 || quarter > 4) {
-            throw new BadRequestException("quarter must be between 1 and 4");
+    public ResourceCostResult activityCostReport(String projectId, String activityId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
         }
-        List<Integer> months = List.of(quarter * 3 - 2, quarter * 3 - 1, quarter * 3);
-        return costSummaryReport(projectId, resourceId, year, months, "Q" + quarter + " " + year);
+        return periodCostReport(projectId, null, activity.startDate(), activity.endDate());
     }
 
     /**
@@ -798,41 +712,11 @@ public class AttendanceQueryService {
      * for the project dashboard (one summary per active resource).
      */
     @Transactional(readOnly = true)
-    public ResourceCostResult yearlyCostReport(String projectId, String resourceId, int year) {
+    public ResourceCostResult yearlyCostReport(String projectId, int year) {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
-        List<Integer> months = List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
-        return costSummaryReport(projectId, resourceId, year, months, String.valueOf(year));
-    }
-
-    private ResourceCostResult costSummaryReport(
-            String projectId, String resourceId, int year, List<Integer> months, String periodLabel) {
-        LocalDate periodStart = LocalDate.of(year, months.get(0), 1);
-        LocalDate periodEnd = LocalDate.of(year, months.get(months.size() - 1), 1);
-        periodEnd = periodEnd.withDayOfMonth(periodEnd.lengthOfMonth());
-        periodValidator.validate(periodStart, periodEnd, projectId, resourceId, periodLabel);
-        List<ResourceCostSummary> rows;
-        if (resourceId != null && !resourceId.isBlank()) {
-            MasterResource resource = masterResourceRepository
-                    .findByResId(resourceId)
-                    .orElseThrow(() -> new NotFoundException("No resource with res_id " + resourceId));
-            String resolvedProjectId = projectId != null && !projectId.isBlank()
-                    ? projectId
-                    : Optional.ofNullable(resolveAssignment(resource))
-                            .map(ProjectResource::getProjectId)
-                            .orElse(null);
-            rows = List.of(buildCostSummary(resource, resolvedProjectId, year, months, periodLabel));
-        } else {
-            if (projectId == null || projectId.isBlank()) {
-                throw new BadRequestException("projectId or resourceId is required");
-            }
-            rows = latestAssignmentsActiveDuring(projectId, periodStart, periodEnd).stream()
-                    .map(ProjectResource::getResource)
-                    .map(resource -> buildCostSummary(resource, projectId, year, months, periodLabel))
-                    .toList();
-        }
-        return new ResourceCostResult(periodLabel, rows.size(), buildCostTotals(rows), rows);
+        return periodCostReport(projectId, null, LocalDate.of(year, 1, 1), LocalDate.of(year, 12, 31));
     }
 
     private ResourceCostTotals buildCostTotals(List<ResourceCostSummary> rows) {
@@ -842,91 +726,28 @@ public class AttendanceQueryService {
         return new ResourceCostTotals(rows.size(), totalCost, totalRelaxation, totalDeducted);
     }
 
-    private ResourceCostSummary buildCostSummary(
-            MasterResource resource, String projectId, int year, List<Integer> months, String periodLabel) {
-        String assignmentOrgId = projectId == null ? null
-                : Optional.ofNullable(resolveAssignmentForProject(resource.getResId(), projectId))
-                        .map(ProjectResource::getOrganisationId).orElse(null);
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, assignmentOrgId);
-
-        Set<Integer> quarters = months.stream().map(m -> (m - 1) / 3 + 1)
-                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
-        Map<Integer, Set<LocalDate>> unpaidFullByQuarter = new HashMap<>();
-        Map<Integer, Set<LocalDate>> unpaidHalfByQuarter = new HashMap<>();
-        for (int quarter : quarters) {
-            QuarterLeaveCalculation calc = computeQuarterlyLeave(resource, projectId, year, quarter);
-            unpaidFullByQuarter.put(quarter, new HashSet<>(calc.unpaidLeaveDates()));
-            unpaidHalfByQuarter.put(quarter, new HashSet<>(calc.unpaidHalfDayDates()));
-        }
-
-        List<MonthlyResourceCost> monthly = months.stream()
-                .map(month -> {
-                    int quarter = (month - 1) / 3 + 1;
-                    LocalDate fromDate = LocalDate.of(year, month, cycleDay);
-                    LocalDate toDate = fromDate.plusMonths(1).minusDays(1);
-                    return buildMonthlyCost(resource, projectId, fromDate, toDate,
-                            fromDate.format(MONTH_YEAR),
-                            unpaidFullByQuarter.getOrDefault(quarter, Set.of()),
-                            unpaidHalfByQuarter.getOrDefault(quarter, Set.of()));
-                })
-                .toList();
-
-        int totalCalendarDays = monthly.stream().mapToInt(MonthlyResourceCost::calendarDays).sum();
-        double totalPlannedCost = monthly.stream().mapToDouble(m -> m.cost() + m.deductedAmount()).sum();
-        double totalUnpaidLeaveDays = monthly.stream().mapToDouble(MonthlyResourceCost::unpaidLeaveDays).sum();
-        double totalDeductedAmount = monthly.stream().mapToDouble(MonthlyResourceCost::deductedAmount).sum();
-
-        double totalRelaxationDays = 0;
-        double totalRelaxationCost = 0;
-        for (int quarter : quarters) {
-            if (projectId != null) {
-                LeaveRelaxation relaxation = leaveRelaxationRepository
-                        .findByResource_ResIdAndProjectIdAndYearAndQuarter(
-                                resource.getResId(), projectId, year, quarter)
-                        .orElse(null);
-                if (relaxation != null && relaxation.getRelaxationDays() > 0) {
-                    totalRelaxationDays += relaxation.getRelaxationDays();
-                    totalRelaxationCost += relaxation.getRelaxationCost();
-                }
-            }
-        }
-
-        double perDayCost = totalCalendarDays > 0 ? round2(totalPlannedCost / totalCalendarDays) : 0d;
-        double paidCalDays = totalCalendarDays - totalUnpaidLeaveDays;
-        double deductedAmount = round2(totalDeductedAmount);
-        double periodCost = round2(totalPlannedCost - totalDeductedAmount);
-        double relaxationCost = round2(totalRelaxationCost);
-        double totalCost = round2(periodCost + relaxationCost);
-
-        return new ResourceCostSummary(
-                resource.getResId(), resource.getName(), projectId, periodLabel,
-                totalCalendarDays, round2(totalPlannedCost), perDayCost,
-                totalUnpaidLeaveDays, round2(paidCalDays),
-                deductedAmount, periodCost,
-                totalRelaxationDays, relaxationCost, totalCost,
-                monthly);
-    }
-
-    private QuarterLeaveCalculation computeQuarterlyLeave(
-            MasterResource resource, String projectId, int year, int quarter) {
+    /**
+     * Paid/unpaid leave breakdown for a resource over an arbitrary {@code [start, end]} window. The
+     * permissible quota is the project's quarterly allowance prorated to the window length; the quota
+     * is shared with predecessor resources of the same designation (replacement inheritance).
+     */
+    private QuarterLeaveCalculation leaveForWindow(
+            MasterResource resource, String projectId, LocalDate start, LocalDate end) {
         ProjectResource assignment = projectId == null ? null
                 : resolveAssignmentForProject(resource.getResId(), projectId);
         String orgId = assignment != null ? assignment.getOrganisationId() : null;
-        LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, orgId);
-        LocalDate qStart = quarterLeaveResolver.quarterStart(year, quarter, cycleDay);
-        LocalDate qEnd = quarterLeaveResolver.quarterEnd(year, quarter, cycleDay);
-        List<Attendance> qRows = attendanceRepository
-                .findByResourceIdAndAttendanceDateBetween(resource.getId(), qStart, qEnd);
-        Set<LocalDate> absentDates = qRows.stream()
+        List<Attendance> rows = attendanceRepository
+                .findByResourceIdAndAttendanceDateBetween(resource.getId(), start, end);
+        Set<LocalDate> absentDates = rows.stream()
                 .filter(a -> a.getStatus() == AttendanceStatus.A)
                 .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
-        Set<LocalDate> halfDayDates = qRows.stream()
+        Set<LocalDate> halfDayDates = rows.stream()
                 .filter(a -> a.getStatus() == AttendanceStatus.HD)
                 .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
-        return quarterLeaveResolver.calculate(
+        double quota = quarterLeaveResolver.activityLeaveQuota(projectId, monthsBetween(start, end));
+        return quarterLeaveResolver.calculateForWindow(
                 resource.getResId(), resource.getId(), projectId, orgId,
-                joiningDate, year, quarter, absentDates, halfDayDates);
+                start, end, quota, absentDates, halfDayDates);
     }
 
     private MonthlyResourceCost buildMonthlyCost(
@@ -949,6 +770,11 @@ public class AttendanceQueryService {
         Double monthlyRate = (assignment != null && rateYear != null)
                 ? assignment.getRateCardByYear().get(rateYear)
                 : null;
+        Double activityRate = activityMonthlyRate(
+                attendance.activityId(), assignment != null ? assignment.getRole() : null);
+        if (activityRate != null) {
+            monthlyRate = activityRate;
+        }
         double rate = monthlyRate != null ? monthlyRate : 0d;
 
         int fullCalendarDays = (int) (toDate.toEpochDay() - fromDate.toEpochDay()) + 1;
@@ -994,7 +820,7 @@ public class AttendanceQueryService {
     /**
      * Monthly paid-leave allowance per resource: uses {@code leavesPerFrequencyCount} directly
      * when {@code leavesFrequency=MONTHLY}; divides quarterly/yearly counts proportionally.
-     * Falls back to {@link ProjectConfig}, then to 0 (no policy = no credit).
+     * Falls back to 0 (no policy = no credit).
      */
     private int resolveMonthlyLeaveAllowance(String projectId, Optional<LeavePolicyResponse> leavePolicy) {
         Integer count = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
@@ -1025,6 +851,43 @@ public class AttendanceQueryService {
                     .orElse(fallbackRateYear);
         }
         return fallbackRateYear;
+    }
+
+    /**
+     * The last date covered by a planned duration in months from {@code start}, honoring fractional
+     * months (e.g. 1.5 = one whole month plus half of the following month's days). The result is
+     * inclusive: a duration of 2.0 from the 11th ends on the 10th two months later.
+     */
+    private LocalDate plannedEndDate(LocalDate start, double durationMonths) {
+        int wholeMonths = (int) Math.floor(durationMonths);
+        double fraction = durationMonths - wholeMonths;
+        LocalDate afterWhole = start.plusMonths(wholeMonths);
+        int extraDays = (int) Math.round(fraction * afterWhole.lengthOfMonth());
+        return afterWhole.plusDays(extraDays).minusDays(1);
+    }
+
+    /**
+     * Inclusive duration of {@code [start, end]} expressed in months as a fraction — the inverse of
+     * {@link #plannedEndDate}. e.g. 11-May → 10-Aug = 3.0; 11-May → 25-Jun ≈ 1.5.
+     */
+    private double monthsBetween(LocalDate start, LocalDate end) {
+        java.time.Period p = java.time.Period.between(start, end.plusDays(1));
+        return p.getYears() * 12 + p.getMonths() + p.getDays() / 30.0;
+    }
+
+    /**
+     * The activity's planned monthly rate for a designation, fetched live from the projects service.
+     * Returns null when the cost is not activity-scoped (no activityId) or the API has no rate for
+     * that designation — callers then fall back to the resource's rate card.
+     */
+    private Double activityMonthlyRate(String activityId, String designation) {
+        if (activityId == null || activityId.isBlank() || designation == null) {
+            return null;
+        }
+        return activityDetailsClient.getActivityDetails(activityId)
+                .map(ActivityDetailsResponse::monthlyRateByDesignation)
+                .map(rates -> rates.get(designation))
+                .orElse(null);
     }
 
     private double round2(double value) {
@@ -1101,9 +964,10 @@ public class AttendanceQueryService {
                 .filter(a -> a.getStatus() == AttendanceStatus.HD)
                 .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
 
-        QuarterLeaveCalculation leaveCalc = quarterLeaveResolver.calculateForPeriod(
+        double quota = quarterLeaveResolver.activityLeaveQuota(projectId, monthsBetween(effectiveStart, effectiveEnd));
+        QuarterLeaveCalculation leaveCalc = quarterLeaveResolver.calculateForWindow(
                 resource.getResId(), resource.getId(), projectId, orgId,
-                joiningDate, effectiveStart, effectiveEnd, absentSet, halfDaySet);
+                effectiveStart, effectiveEnd, quota, absentSet, halfDaySet);
 
         double effectiveAbsent = absentDays + halfDays * 0.5;
         double paidLeaveDays = leaveCalc.paidLeaveDays();
@@ -1124,7 +988,7 @@ public class AttendanceQueryService {
     /**
      * Resource cost report scoped to an arbitrary date range (activity upload period).
      * Per-day rate is computed per-month-segment so cross-month periods are priced correctly.
-     * Leave is period-scoped via {@link QuarterLeaveResolver#calculateForPeriod}.
+     * Leave is period-scoped via {@link QuarterLeaveResolver#calculateForWindow}.
      */
     @Transactional(readOnly = true)
     public ResourceCostResult periodCostReport(
@@ -1181,9 +1045,10 @@ public class AttendanceQueryService {
                 .filter(a -> a.getStatus() == AttendanceStatus.HD)
                 .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
 
-        QuarterLeaveCalculation leaveCalc = quarterLeaveResolver.calculateForPeriod(
+        double quota = quarterLeaveResolver.activityLeaveQuota(projectId, monthsBetween(effectiveFrom, effectiveTo));
+        QuarterLeaveCalculation leaveCalc = quarterLeaveResolver.calculateForWindow(
                 resource.getResId(), resource.getId(), projectId, orgId,
-                joiningDate, effectiveFrom, effectiveTo, absentSet, halfDaySet);
+                effectiveFrom, effectiveTo, quota, absentSet, halfDaySet);
 
         Set<LocalDate> unpaidFull = new HashSet<>(leaveCalc.unpaidLeaveDates());
         Set<LocalDate> unpaidHalf = new HashSet<>(leaveCalc.unpaidHalfDayDates());
@@ -1192,6 +1057,7 @@ public class AttendanceQueryService {
         double totalPlannedCost = 0d;
         double totalDeductedAmount = 0d;
         if (assignment != null) {
+            Double activityRate = activityMonthlyRate(activityId, assignment.getRole());
             LocalDate segStart = effectiveFrom;
             while (!segStart.isAfter(effectiveTo)) {
                 LocalDate monthEnd = segStart.withDayOfMonth(segStart.lengthOfMonth());
@@ -1199,7 +1065,8 @@ public class AttendanceQueryService {
                 int daysInSegment = (int) (segEnd.toEpochDay() - segStart.toEpochDay()) + 1;
                 String segRateYear = resolveRateYear(projectId, orgId, segStart,
                         assignment.getRateYear());
-                Double segRate = segRateYear != null ? assignment.getRateCardByYear().get(segRateYear) : null;
+                Double segRate = activityRate != null ? activityRate
+                        : (segRateYear != null ? assignment.getRateCardByYear().get(segRateYear) : null);
                 if (segRate != null) {
                     totalPlannedCost += segRate * daysInSegment / segStart.lengthOfMonth();
                 }
@@ -1208,14 +1075,16 @@ public class AttendanceQueryService {
             for (LocalDate d : unpaidFull) {
                 if (!d.isBefore(effectiveFrom) && !d.isAfter(effectiveTo)) {
                     String dRateYear = resolveRateYear(projectId, orgId, d, assignment.getRateYear());
-                    Double dRate = dRateYear != null ? assignment.getRateCardByYear().get(dRateYear) : null;
+                    Double dRate = activityRate != null ? activityRate
+                            : (dRateYear != null ? assignment.getRateCardByYear().get(dRateYear) : null);
                     if (dRate != null) totalDeductedAmount += dRate / d.lengthOfMonth();
                 }
             }
             for (LocalDate d : unpaidHalf) {
                 if (!d.isBefore(effectiveFrom) && !d.isAfter(effectiveTo)) {
                     String dRateYear = resolveRateYear(projectId, orgId, d, assignment.getRateYear());
-                    Double dRate = dRateYear != null ? assignment.getRateCardByYear().get(dRateYear) : null;
+                    Double dRate = activityRate != null ? activityRate
+                            : (dRateYear != null ? assignment.getRateCardByYear().get(dRateYear) : null);
                     if (dRate != null) totalDeductedAmount += 0.5 * dRate / d.lengthOfMonth();
                 }
             }
@@ -1225,14 +1094,12 @@ public class AttendanceQueryService {
         double deductedAmount = round2(totalDeductedAmount);
         double periodCost = round2(totalPlannedCost - totalDeductedAmount);
 
-        int year = periodStart.getYear();
-        int quarter = (periodStart.getMonthValue() - 1) / 3 + 1;
         double relaxationDays = 0;
         double relaxationCostVal = 0;
-        if (projectId != null) {
+        if (projectId != null && activityId != null) {
             LeaveRelaxation relaxation = leaveRelaxationRepository
-                    .findByResource_ResIdAndProjectIdAndYearAndQuarter(
-                            resource.getResId(), projectId, year, quarter)
+                    .findByResource_ResIdAndProjectIdAndActivityId(
+                            resource.getResId(), projectId, activityId)
                     .orElse(null);
             if (relaxation != null) {
                 relaxationDays = relaxation.getRelaxationDays();
@@ -1247,9 +1114,10 @@ public class AttendanceQueryService {
             if (!isWeekend(d) && !holidays.contains(d)) workingDays++;
         }
 
-        Double monthlyRate = (assignment != null && rateYear != null)
-                ? assignment.getRateCardByYear().get(rateYear)
-                : null;
+        Double activityDisplayRate = activityMonthlyRate(
+                activityId, assignment != null ? assignment.getRole() : null);
+        Double monthlyRate = activityDisplayRate != null ? activityDisplayRate
+                : ((assignment != null && rateYear != null) ? assignment.getRateCardByYear().get(rateYear) : null);
         MonthlyResourceCost periodEntry = new MonthlyResourceCost(
                 resource.getResId(), resource.getName(), projectId,
                 milestoneId, activityId,
@@ -1269,91 +1137,4 @@ public class AttendanceQueryService {
                 List.of(periodEntry));
     }
 
-    @Transactional(readOnly = true)
-    public QuarterLeaveReport quarterlySettlement(int year, int quarter) {
-        return quarterlySettlement(year, quarter, null);
-    }
-
-    @Transactional(readOnly = true)
-    public QuarterLeaveReport quarterlySettlement(int year, int quarter, String projectId) {
-        if (quarter < 1 || quarter > 4) {
-            throw new BadRequestException("quarter must be between 1 and 4");
-        }
-        if (year < 1970 || year > 9999) {
-            throw new BadRequestException("year must be between 1970 and 9999");
-        }
-
-        String orgId = (projectId == null || projectId.isBlank()) ? null
-                : projectResourceRepository.findByProjectIdAndActiveTrue(projectId)
-                        .stream().findFirst()
-                        .map(ProjectResource::getOrganisationId)
-                        .orElse(null);
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, orgId);
-        LocalDate quarterStart = quarterLeaveResolver.quarterStart(year, quarter, cycleDay);
-        LocalDate quarterEnd = quarterLeaveResolver.quarterEnd(year, quarter, cycleDay);
-
-        periodValidator.validate(quarterStart, quarterEnd, projectId, null, "Q" + quarter + " " + year);
-        List<Attendance> rows = (projectId == null || projectId.isBlank())
-                ? attendanceRepository.findByAttendanceDateBetween(quarterStart, quarterEnd)
-                : attendanceRepository.findByProjectIdAndAttendanceDateBetween(projectId, quarterStart, quarterEnd);
-        Set<Integer> monthsWithData = rows.stream()
-                .map(a -> a.getAttendanceDate().getMonthValue())
-                .collect(Collectors.toCollection(HashSet::new));
-
-        Map<Long, List<Attendance>> byResource =
-                rows.stream().collect(Collectors.groupingBy(a -> a.getResource().getId()));
-
-        List<ResourceQuarterSettlement> settlements = new ArrayList<>();
-        for (List<Attendance> resourceRows : byResource.values()) {
-            MasterResource resource = resourceRows.get(0).getResource();
-            String resourceProjectId = resourceRows.get(0).getProjectId();
-            String resourceOrgId = resourceRows.get(0).getOrganisationId();
-
-            Set<LocalDate> absentDates = resourceRows.stream()
-                    .filter(a -> a.getStatus() == AttendanceStatus.A)
-                    .map(Attendance::getAttendanceDate)
-                    .collect(Collectors.toSet());
-
-            Set<LocalDate> halfDayDates = resourceRows.stream()
-                    .filter(a -> a.getStatus() == AttendanceStatus.HD)
-                    .map(Attendance::getAttendanceDate)
-                    .collect(Collectors.toSet());
-
-            Optional<ProjectResource> assignmentOpt = projectResourceRepository
-                    .findByResource_ResIdAndProjectIdAndActiveTrue(resource.getResId(), resourceProjectId)
-                    .or(() -> projectResourceRepository
-                            .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(
-                                    resource.getResId(), resourceProjectId)
-                            .stream()
-                            .findFirst());
-            LocalDate joiningDate = assignmentOpt
-                    .map(ProjectResource::getAssignmentStartDate)
-                    .orElse(resource.getDateOfJoining());
-
-            QuarterLeaveCalculation calculation = quarterLeaveResolver.calculate(
-                    resource.getResId(), resource.getId(), resourceProjectId, resourceOrgId,
-                    joiningDate, year, quarter,
-                    absentDates, halfDayDates);
-
-            String milestoneId = null;
-            String activityId  = null;
-            for (Attendance row : resourceRows) {
-                if (row.getMilestoneId() != null) milestoneId = row.getMilestoneId();
-                if (row.getActivityId()  != null) activityId  = row.getActivityId();
-            }
-
-            settlements.add(new ResourceQuarterSettlement(
-                    resource.getResId(), resource.getName(), milestoneId, activityId, joiningDate, calculation));
-        }
-        settlements.sort(Comparator.comparing(ResourceQuarterSettlement::attendanceId));
-
-        return new QuarterLeaveReport(
-                year,
-                quarter,
-                quarterStart,
-                quarterEnd,
-                monthsWithData.stream().sorted().toList(),
-                settlements.size(),
-                settlements);
-    }
 }

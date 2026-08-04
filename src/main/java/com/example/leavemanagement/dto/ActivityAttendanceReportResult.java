@@ -10,6 +10,8 @@ public record ActivityAttendanceReportResult(
         String projectId,
         String milestoneId,
         String period,
+        @JsonFormat(pattern = "dd-MM-yyyy") LocalDate activityStartDate,
+        @JsonFormat(pattern = "dd-MM-yyyy") LocalDate activityEndDate,
         @JsonFormat(pattern = "dd-MM-yyyy") LocalDate reportStartDate,
         @JsonFormat(pattern = "dd-MM-yyyy") LocalDate reportEndDate,
         int calendarDays,

@@ -8,7 +8,6 @@ import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.entity.PublicHoliday;
 import com.example.leavemanagement.repository.AttendanceRepository;
-import com.example.leavemanagement.repository.ProjectConfigRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import com.example.leavemanagement.repository.PublicHolidayRepository;
 import java.time.LocalDate;
@@ -23,13 +22,17 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 /**
- * Single source of truth for turning a resource's quarter of absences into a paid/unpaid
- * {@link QuarterLeaveCalculation} under UIDAI leave policy 5.24.1. Both the attendance settlement
- * report and the employee leave-detail report delegate here so the permissible-leave allowance,
- * carry-forward lookback and {@link QuarterLeavePolicy} invocation are computed identically.
+ * Single source of truth for turning a resource's absences over an <b>activity window</b> into a
+ * paid/unpaid {@link QuarterLeaveCalculation} under UIDAI leave policy 5.24.1. The window is the
+ * activity's execution period {@code [startDate, endDate]} (or any arbitrary date range) — not a
+ * fixed calendar quarter.
  *
- * <p>Full absent days (status=A) count as 1.0 leave day; half-day attendance (status=HD) counts
- * as 0.5. Both are passed to {@link QuarterLeavePolicy} which allocates them chronologically.
+ * <p>The permissible leave quota is the project's quarterly allowance (default 6) prorated linearly
+ * by the window's duration in months ({@link #activityLeaveQuota}). The quota is shared across the
+ * chain of resources that held the same designation within the window (replacement inheritance).
+ *
+ * <p>Full absent days (status=A) count as 1.0 leave day; half-day attendance (status=HD) counts as
+ * 0.5. Both are passed to {@link QuarterLeavePolicy} which allocates them chronologically.
  */
 @Component
 public class QuarterLeaveResolver {
@@ -38,7 +41,6 @@ public class QuarterLeaveResolver {
     private final PublicHolidayRepository holidayRepository;
     private final LeavePolicyClient leavePolicyClient;
     private final QuarterLeavePolicy policy;
-    private final ProjectConfigRepository projectConfigRepository;
     private final ProjectResourceRepository projectResourceRepository;
 
     public QuarterLeaveResolver(
@@ -46,110 +48,62 @@ public class QuarterLeaveResolver {
             PublicHolidayRepository holidayRepository,
             LeavePolicyClient leavePolicyClient,
             QuarterLeavePolicy policy,
-            ProjectConfigRepository projectConfigRepository,
             ProjectResourceRepository projectResourceRepository) {
         this.attendanceRepository = attendanceRepository;
         this.holidayRepository = holidayRepository;
         this.leavePolicyClient = leavePolicyClient;
         this.policy = policy;
-        this.projectConfigRepository = projectConfigRepository;
         this.projectResourceRepository = projectResourceRepository;
     }
 
     /**
-     * Returns the configured quarter cycle start day (1–28) for the given project/organisation.
-     * Falls back to 1 when no config exists, giving standard calendar quarters (Jan 1, Apr 1, etc.).
+     * Permissible paid-leave quota for a window of {@code durationMonths} months: the project's
+     * quarterly allowance scaled linearly (6 per quarter → 2 per month). e.g. 3.0 mo → 6, 1.5 mo → 3,
+     * 2.0 mo → 4.
      */
-    public int resolveCycleDay(String projectId, String organisationId) {
-        if (projectId == null || organisationId == null) return 1;
-        return projectConfigRepository
-                .findByProjectIdAndOrganisationId(projectId, organisationId)
-                .map(c -> c.getQuarterCycleDay())
-                .orElse(1);
+    public double activityLeaveQuota(String projectId, double durationMonths) {
+        Optional<LeavePolicyResponse> leavePolicy =
+                projectId == null ? Optional.empty() : leavePolicyClient.getLeavePolicy(projectId);
+        int quarterlyAllowance = resolveMaxLeaves(projectId, leavePolicy);
+        return Math.round(quarterlyAllowance * durationMonths / 3.0);
     }
 
     /**
-     * Quarter start date. Quarters are always calendar-aligned (Q1=Jan, Q2=Apr, Q3=Jul, Q4=Oct)
-     * but begin on {@code cycleDay} of the month rather than the 1st.
-     * Example: cycleDay=7, quarter=2, year=2024 → Apr 7, 2024.
+     * Computes the paid/unpaid leave breakdown for one resource over an activity window
+     * {@code [windowStart, windowEnd]}. The {@code permissibleQuota} (see {@link #activityLeaveQuota})
+     * is shared with any predecessor resources of the same designation whose assignments overlap the
+     * window — their already-consumed paid leave is deducted first (replacement inheritance).
      */
-    public LocalDate quarterStart(int year, int quarter, int cycleDay) {
-        int baseMonth = (quarter - 1) * 3 + 1;
-        return LocalDate.of(year, baseMonth, cycleDay);
-    }
-
-    /**
-     * Quarter end date (inclusive) — exactly 3 months after the quarter start, minus 1 day.
-     * Example: cycleDay=7, Q2 2024 start=Apr 7 → end=Jul 6.
-     */
-    public LocalDate quarterEnd(int year, int quarter, int cycleDay) {
-        return quarterStart(year, quarter, cycleDay).plusMonths(3).minusDays(1);
-    }
-
-    /**
-     * Computes the quarter's paid/unpaid leave breakdown for one resource.
-     *
-     * <p>Leave entitlement is tied to the designation, not the individual resource. The full quota
-     * ({@code maxLeaves}) is shared across the chain of resources that held the same designation
-     * within the quarter. Predecessors' paid leave is deducted so the current resource inherits
-     * only the remaining balance. No pro-rating is applied for join or leave dates.
-     *
-     * @param resId the resource's string identifier (res_id), used for replacement chain lookup
-     * @param resourceId the {@link com.example.leavemanagement.entity.MasterResource} id
-     * @param projectId the resource's project (or {@code null})
-     * @param joiningDate the resource's effective assignment start (kept for carry-forward lookback)
-     * @param year settlement year
-     * @param quarter settlement quarter (1–4)
-     * @param absentDates dates the resource was fully absent (A) within the quarter
-     * @param halfDayDates dates the resource worked a half-day (HD) within the quarter
-     */
-    public QuarterLeaveCalculation calculate(
+    public QuarterLeaveCalculation calculateForWindow(
             String resId,
             Long resourceId,
             String projectId,
             String organisationId,
-            LocalDate joiningDate,
-            int year,
-            int quarter,
+            LocalDate windowStart,
+            LocalDate windowEnd,
+            double permissibleQuota,
             Set<LocalDate> absentDates,
             Set<LocalDate> halfDayDates) {
-        int cycleDay = resolveCycleDay(projectId, organisationId);
-        LocalDate quarterStart = quarterStart(year, quarter, cycleDay);
-        LocalDate quarterEnd = quarterEnd(year, quarter, cycleDay);
-
-        Set<LocalDate> holidays = holidaysBetween(quarterStart, quarterEnd);
-
-        Optional<LeavePolicyResponse> leavePolicy =
-                projectId == null ? Optional.empty() : leavePolicyClient.getLeavePolicy(projectId);
-        int maxLeaves = resolveMaxLeaves(projectId, leavePolicy);
+        Set<LocalDate> holidays = holidaysBetween(windowStart, windowEnd);
 
         List<ProjectResource> predecessorChain =
                 (resId != null && projectId != null)
-                        ? findPredecessorChain(resId, projectId, quarterStart, quarterEnd)
+                        ? findPredecessorChain(resId, projectId, windowStart, windowEnd)
                         : List.of();
-        double effectiveMaxLeaves;
-        if (predecessorChain.isEmpty()) {
-            effectiveMaxLeaves = maxLeaves;
-        } else {
-            effectiveMaxLeaves = computeRemainingFromChain(
-                    predecessorChain, quarterStart, quarterEnd, holidays, maxLeaves);
-        }
-
-        boolean carryForwardAllowed =
-                leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
-        int carriedForwardDays = (resourceId != null && carryForwardAllowed)
-                ? resolveCarriedForwardDays(resourceId, year, quarter, joiningDate, maxLeaves, cycleDay)
-                : 0;
+        double effectiveQuota = predecessorChain.isEmpty()
+                ? permissibleQuota
+                : computeRemainingFromChain(predecessorChain, windowStart, windowEnd, holidays, permissibleQuota);
 
         return policy.compute(
-                quarterStart, quarterEnd, null,
+                windowStart, windowEnd, null,
                 absentDates, halfDayDates,
-                holidays, effectiveMaxLeaves, carriedForwardDays);
+                holidays, effectiveQuota, 0);
     }
 
     /**
-     * Paid-leave allowance for one quarter: scales {@code leavesPerFrequencyCount} to a quarter
-     * using {@code leavesFrequency}. Falls back to {@link QuarterLeavePolicy#MAX_PERMISSIBLE_LEAVE}.
+     * The project's paid-leave allowance for one quarter (3 months): scales
+     * {@code leavesPerFrequencyCount} by {@code leavesFrequency}. Falls back to
+     * {@link QuarterLeavePolicy#MAX_PERMISSIBLE_LEAVE} (6) when no policy is configured.
      */
     public int resolveMaxLeaves(String projectId, Optional<LeavePolicyResponse> leavePolicy) {
         Integer count = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
@@ -159,8 +113,7 @@ public class QuarterLeaveResolver {
         return QuarterLeavePolicy.MAX_PERMISSIBLE_LEAVE;
     }
 
-    /** Scales a leave allowance expressed at {@code frequency} to a single quarter (3 months). */
-    public int leavesForQuarter(int count, String frequency) {
+    private int leavesForQuarter(int count, String frequency) {
         if (frequency == null) {
             return count;
         }
@@ -173,7 +126,7 @@ public class QuarterLeaveResolver {
     }
 
     private List<ProjectResource> findPredecessorChain(
-            String resId, String projectId, LocalDate quarterStart, LocalDate quarterEnd) {
+            String resId, String projectId, LocalDate windowStart, LocalDate windowEnd) {
         List<ProjectResource> chain = new ArrayList<>();
         String lookup = resId;
         Set<String> visited = new HashSet<>();
@@ -185,9 +138,9 @@ public class QuarterLeaveResolver {
             ProjectResource pr = pred.get();
             LocalDate start = pr.getAssignmentStartDate();
             LocalDate end = pr.getAssignmentEndDate();
-            boolean overlapsQuarter = !start.isAfter(quarterEnd)
-                    && (end == null || !end.isBefore(quarterStart));
-            if (!overlapsQuarter) break;
+            boolean overlapsWindow = !start.isAfter(windowEnd)
+                    && (end == null || !end.isBefore(windowStart));
+            if (!overlapsWindow) break;
             String predResId = pr.getResource().getResId();
             if (!visited.add(predResId)) break;
             chain.add(pr);
@@ -198,13 +151,13 @@ public class QuarterLeaveResolver {
     }
 
     private double computeRemainingFromChain(
-            List<ProjectResource> chain, LocalDate quarterStart, LocalDate quarterEnd,
-            Set<LocalDate> holidays, int maxLeaves) {
+            List<ProjectResource> chain, LocalDate windowStart, LocalDate windowEnd,
+            Set<LocalDate> holidays, double maxLeaves) {
         double remaining = maxLeaves;
         for (ProjectResource pr : chain) {
             List<Attendance> predAttendance = attendanceRepository
                     .findByResourceIdAndAttendanceDateBetween(
-                            pr.getResource().getId(), quarterStart, quarterEnd);
+                            pr.getResource().getId(), windowStart, windowEnd);
             Set<LocalDate> predAbsent = predAttendance.stream()
                     .filter(a -> a.getStatus() == AttendanceStatus.A)
                     .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
@@ -212,124 +165,11 @@ public class QuarterLeaveResolver {
                     .filter(a -> a.getStatus() == AttendanceStatus.HD)
                     .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
             QuarterLeaveCalculation predCalc = policy.compute(
-                    quarterStart, quarterEnd, null,
+                    windowStart, windowEnd, null,
                     predAbsent, predHalfDays, holidays, remaining, 0);
             remaining = Math.max(0.0, remaining - predCalc.paidLeaveDays());
         }
         return remaining;
-    }
-
-    /**
-     * Unused permissible leave from the previous quarter. Includes both full-absent and half-day
-     * dates from that quarter so the lapsed-leave figure is consistent with how this quarter is
-     * computed.
-     */
-    private int resolveCarriedForwardDays(
-            Long resourceId, int year, int quarter, LocalDate joiningDate, int maxLeaves,
-            int cycleDay) {
-        int prevQuarter = quarter == 1 ? 4 : quarter - 1;
-        int prevYear = quarter == 1 ? year - 1 : year;
-        LocalDate prevStart = quarterStart(prevYear, prevQuarter, cycleDay);
-        LocalDate prevEnd = quarterEnd(prevYear, prevQuarter, cycleDay);
-        if (joiningDate != null && joiningDate.isAfter(prevEnd)) {
-            return 0;
-        }
-
-        Set<LocalDate> prevHolidays = holidaysBetween(prevStart, prevEnd);
-        List<Attendance> prevAttendance =
-                attendanceRepository.findByResourceIdAndAttendanceDateBetween(resourceId, prevStart, prevEnd);
-
-        Set<LocalDate> prevAbsentDates = prevAttendance.stream()
-                .filter(a -> a.getStatus() == AttendanceStatus.A)
-                .map(Attendance::getAttendanceDate)
-                .collect(Collectors.toSet());
-
-        Set<LocalDate> prevHalfDayDates = prevAttendance.stream()
-                .filter(a -> a.getStatus() == AttendanceStatus.HD)
-                .map(Attendance::getAttendanceDate)
-                .collect(Collectors.toSet());
-
-        QuarterLeaveCalculation prevCalc = policy.compute(
-                prevStart, prevEnd, joiningDate,
-                prevAbsentDates, prevHalfDayDates,
-                prevHolidays, maxLeaves, 0);
-
-        return (int) Math.round(prevCalc.lapsedLeaveDays());
-    }
-
-    /**
-     * Computes the paid/unpaid leave breakdown for one resource scoped to an arbitrary
-     * attendance period (e.g. an activity upload window like 09-Jan-2026 to 08-Feb-2026).
-     *
-     * <p>The quarter's full leave quota (with designation-chain deduction) is established first,
-     * then the paid leaves already consumed in the same quarter before {@code periodStart} are
-     * subtracted so the period inherits the correct cumulative balance. The policy is then applied
-     * to only the dates within {@code [periodStart, periodEnd]}.
-     */
-    public QuarterLeaveCalculation calculateForPeriod(
-            String resId,
-            Long resourceId,
-            String projectId,
-            String organisationId,
-            LocalDate joiningDate,
-            LocalDate periodStart,
-            LocalDate periodEnd,
-            Set<LocalDate> absentInPeriod,
-            Set<LocalDate> halfDayInPeriod) {
-
-        int cycleDay = resolveCycleDay(projectId, organisationId);
-        int year = periodStart.getYear();
-        int quarter = (periodStart.getMonthValue() - 1) / 3 + 1;
-        LocalDate quarterStart = quarterStart(year, quarter, cycleDay);
-        LocalDate quarterEnd = quarterEnd(year, quarter, cycleDay);
-
-        LocalDate calcEnd = periodEnd.isAfter(quarterEnd) ? quarterEnd : periodEnd;
-
-        Set<LocalDate> quarterHolidays = holidaysBetween(quarterStart, quarterEnd);
-        Set<LocalDate> periodHolidays = holidaysBetween(periodStart, calcEnd);
-
-        Optional<LeavePolicyResponse> leavePolicy =
-                projectId == null ? Optional.empty() : leavePolicyClient.getLeavePolicy(projectId);
-        int maxLeaves = resolveMaxLeaves(projectId, leavePolicy);
-
-        List<ProjectResource> predecessorChain =
-                (resId != null && projectId != null)
-                        ? findPredecessorChain(resId, projectId, quarterStart, quarterEnd)
-                        : List.of();
-        double effectiveMaxLeaves = predecessorChain.isEmpty()
-                ? maxLeaves
-                : computeRemainingFromChain(predecessorChain, quarterStart, quarterEnd, quarterHolidays, maxLeaves);
-
-        boolean carryForwardAllowed =
-                leavePolicy.map(LeavePolicyResponse::carryForwardAllowed).orElse(Boolean.FALSE);
-        int carriedForwardDays = (resourceId != null && carryForwardAllowed)
-                ? resolveCarriedForwardDays(resourceId, year, quarter, joiningDate, maxLeaves, cycleDay)
-                : 0;
-        double totalQuota = effectiveMaxLeaves + carriedForwardDays;
-
-        if (resourceId != null && periodStart.isAfter(quarterStart)) {
-            List<Attendance> priorRows = attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                    resourceId, quarterStart, periodStart.minusDays(1));
-            Set<LocalDate> priorAbsent = priorRows.stream()
-                    .filter(a -> a.getStatus() == AttendanceStatus.A)
-                    .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
-            Set<LocalDate> priorHalfDay = priorRows.stream()
-                    .filter(a -> a.getStatus() == AttendanceStatus.HD)
-                    .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
-            Set<LocalDate> priorHolidays = holidaysBetween(quarterStart, periodStart.minusDays(1));
-            QuarterLeaveCalculation priorCalc = policy.compute(
-                    quarterStart, periodStart.minusDays(1), null,
-                    priorAbsent, priorHalfDay, priorHolidays, totalQuota, 0);
-            totalQuota = Math.max(0.0, totalQuota - priorCalc.paidLeaveDays());
-        }
-
-        Set<LocalDate> absentInCalc = absentInPeriod.stream()
-                .filter(d -> !d.isAfter(calcEnd)).collect(Collectors.toSet());
-        Set<LocalDate> halfDayInCalc = halfDayInPeriod.stream()
-                .filter(d -> !d.isAfter(calcEnd)).collect(Collectors.toSet());
-
-        return policy.compute(periodStart, calcEnd, null,
-                absentInCalc, halfDayInCalc, periodHolidays, totalQuota, 0);
     }
 
     private Set<LocalDate> holidaysBetween(LocalDate start, LocalDate end) {
@@ -337,5 +177,4 @@ public class QuarterLeaveResolver {
                 .map(PublicHoliday::getHolidayDate)
                 .collect(Collectors.toSet());
     }
-
 }

@@ -57,45 +57,35 @@ public class ResourceCostController {
     }
 
     /**
-     * Quarterly cost: one resource (resourceId) or the whole project dashboard (projectId). Each
-     * resource's total is the sum of its 3 months, computed separately per month.
-     * GET /api/attendance/cost/quarterly?projectId=&resourceId=&year=&quarter=
+     * Activity cost: one summary per resource active during the activity, scoped to the activity's
+     * execution window (fetched live from PMIS). Planned cost tracks monthlyRate x duration.
+     * GET /api/attendance/cost/activity?projectId=&activityId=
      */
     @Operation(
-            summary = "Quarterly resource cost report",
-            description = "Pass resourceId for one resource's cost summary, or projectId for the project "
-                    + "dashboard (one summary per active resource). Each summary's totalCost is the sum of its "
-                    + "3 months, computed separately per month rather than blended over the quarter. Calendar "
-                    + "quarters: Q1 Jan-Mar, Q2 Apr-Jun, Q3 Jul-Sep, Q4 Oct-Dec.")
-    @GetMapping("/quarterly")
-    public ResourceCostResult quarterlyCostReport(
-            @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
-                    String projectId,
-            @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
-                    String resourceId,
-            @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
-            @Parameter(description = "Quarter (1-4)", example = "3") @RequestParam("quarter") int quarter) {
-        return attendanceQueryService.quarterlyCostReport(projectId, resourceId, year, quarter);
+            summary = "Activity resource cost report",
+            description = "One ResourceCostSummary per resource active during the activity's start/end window. "
+                    + "Per-day rate = monthlyRate / calendarDaysInMonth per month segment; unpaid-leave "
+                    + "deductions and relaxation additions apply only within the uploaded periods.")
+    @GetMapping("/activity")
+    public ResourceCostResult activityCostReport(
+            @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam("activityId") String activityId) {
+        return attendanceQueryService.activityCostReport(projectId, activityId);
     }
 
     /**
-     * Yearly cost: one resource (resourceId) or the whole project dashboard (projectId). Each
-     * resource's total is the sum of its 12 months, computed separately per month.
-     * GET /api/attendance/cost/yearly?projectId=&resourceId=&year=
+     * Yearly cost: project dashboard (one summary per active resource), summed per month.
+     * GET /api/attendance/cost/yearly?projectId=&year=
      */
     @Operation(
             summary = "Yearly resource cost report",
-            description = "Pass resourceId for one resource's cost summary, or projectId for the project "
-                    + "dashboard (one summary per active resource). Each summary's totalCost is the sum of its "
-                    + "12 months, computed separately per month rather than blended over the year.")
+            description = "One summary per resource active during the year on 'projectId'. Each summary's "
+                    + "totalCost is the sum of its months, computed separately per month rather than blended.")
     @GetMapping("/yearly")
     public ResourceCostResult yearlyCostReport(
-            @Parameter(description = "Project id (dashboard mode)") @RequestParam(required = false)
-                    String projectId,
-            @Parameter(description = "res_id (single-resource mode)") @RequestParam(required = false)
-                    String resourceId,
+            @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year) {
-        return attendanceQueryService.yearlyCostReport(projectId, resourceId, year);
+        return attendanceQueryService.yearlyCostReport(projectId, year);
     }
 
     /**

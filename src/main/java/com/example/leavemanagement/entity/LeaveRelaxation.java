@@ -28,16 +28,16 @@ import lombok.Setter;
  * only stores the outcome: {@code finalUnpaidLeave = originalUnpaidLeave - relaxationDays}.
  * Paid leave is never changed by a relaxation.
  *
- * <p>One row per {@code (resource, project, year, quarter)} — re-recording a decision for the
- * same quarter updates the existing row rather than creating a new one.
+ * <p>One row per {@code (resource, project, activity)} — re-recording a decision for the same
+ * activity updates the existing row rather than creating a new one.
  */
 @Entity
 @Table(
         name = "leave_relaxation",
         uniqueConstraints =
                 @UniqueConstraint(
-                        name = "uk_leave_relaxation_resource_project_period",
-                        columnNames = {"resource_id", "project_id", "leave_year", "quarter"}))
+                        name = "uk_leave_relaxation_resource_project_activity",
+                        columnNames = {"resource_id", "project_id", "activity_id"}))
 @Getter
 @Setter
 public class LeaveRelaxation {
@@ -56,13 +56,9 @@ public class LeaveRelaxation {
     @Setter(AccessLevel.NONE)
     private String projectId;
 
-    @Column(name = "leave_year", nullable = false)
+    @Column(name = "activity_id", nullable = false, length = 100)
     @Setter(AccessLevel.NONE)
-    private int year;
-
-    @Column(name = "quarter", nullable = false)
-    @Setter(AccessLevel.NONE)
-    private int quarter;
+    private String activityId;
 
     @Column(name = "original_paid_leave", nullable = false)
     private double originalPaidLeave;
@@ -114,11 +110,10 @@ public class LeaveRelaxation {
         // for JPA
     }
 
-    public LeaveRelaxation(MasterResource resource, String projectId, int year, int quarter) {
+    public LeaveRelaxation(MasterResource resource, String projectId, String activityId) {
         this.resource = resource;
         this.projectId = projectId;
-        this.year = year;
-        this.quarter = quarter;
+        this.activityId = activityId;
     }
 
     public List<LocalDate> getRelaxationDates() {

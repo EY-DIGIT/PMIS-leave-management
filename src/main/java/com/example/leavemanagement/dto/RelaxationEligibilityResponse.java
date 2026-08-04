@@ -17,8 +17,7 @@ import java.util.List;
 public record RelaxationEligibilityResponse(
         String attendanceId,
         String projectId,
-        int year,
-        int quarter,
+        String activityId,
         List<LocalDate> unpaidFullDayDates,
         List<LocalDate> unpaidHalfDayDates,
         List<LocalDate> sandwichDates,

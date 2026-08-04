@@ -15,10 +15,10 @@ import com.example.leavemanagement.dto.AttendanceReportSummary;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
+import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityDetailsResponse;
+import com.example.leavemanagement.dto.ActivityResourceConfig;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
-import com.example.leavemanagement.dto.QuarterLeaveReport;
-import com.example.leavemanagement.dto.ResourceCostResult;
-import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.MasterResource;
@@ -76,13 +76,9 @@ class AttendanceQueryServiceTest {
     private com.example.leavemanagement.repository.ProjectYearMappingRepository yearMappingRepository;
 
     @Mock
-    private com.example.leavemanagement.repository.ProjectConfigRepository projectConfigRepository;
+    private com.example.leavemanagement.client.ActivityDetailsClient activityDetailsClient;
 
-    @Mock
-    private com.example.leavemanagement.repository.ActivityRepository activityRepository;
-    // ActivityRepository is injected to validate upload periods against activity date bounds
-
-    // Real engine — the quarterly-settlement path is verified end-to-end.
+    // Real leave engine — the activity-window leave path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
     private AttendanceQueryService service;
@@ -90,12 +86,13 @@ class AttendanceQueryServiceTest {
     @BeforeEach
     void setUp() {
         QuarterLeaveResolver quarterLeaveResolver = new QuarterLeaveResolver(
-                attendanceRepository, holidayRepository, leavePolicyClient, policy, projectConfigRepository,
+                attendanceRepository, holidayRepository, leavePolicyClient, policy,
                 projectResourceRepository);
         service = new AttendanceQueryService(
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
-                quarterLeaveResolver, periodValidator, yearMappingRepository, activityRepository);
+                quarterLeaveResolver, periodValidator, yearMappingRepository,
+                activityDetailsClient);
     }
 
     private MultipartFile anyFile() {
@@ -323,30 +320,35 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void quarterlyReportRequiresProjectIdOrResourceId() {
-        assertThatThrownBy(() -> service.quarterlyReport(null, null, null, null, null, 2026, 3))
-                .isInstanceOf(BadRequestException.class);
-    }
-
-    @Test
-    void quarterlyReportScopedToResourceIgnoresProjectId() {
+    void activityReportUsesActivityWindowFetchedLive() {
         MasterResource resource = new MasterResource("E1");
         resource.setName("Sanju");
         setId(resource, 1L);
-        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
-        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.empty());
+        ProjectResource assignment =
+                new ProjectResource(resource, "P1", "Architect Dev Ops Automation", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("Sample Activity",
+                        LocalDate.of(2027, 5, 11), LocalDate.of(2027, 8, 10),
+                        List.of(new ActivityResourceConfig("Architect Dev Ops Automation", 2, 3.0, 211982.0)))));
+        when(attendanceRepository.findMinDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(List.of(resource));
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
-                .thenReturn(List.of());
-        when(attendanceRepository.findMinDateByResIdAndDateBetween(eq("E1"), any(), any()))
-                .thenReturn(Optional.empty());
-        when(attendanceRepository.findMaxDateByResIdAndDateBetween(eq("E1"), any(), any()))
-                .thenReturn(Optional.empty());
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any())).thenReturn(List.of());
 
-        AttendanceReportResult report = service.quarterlyReport(null, "E1", null, null, null, 2026, 3);
+        ActivityAttendanceReportResult report = service.activityReport("P1", "M1", "ACT-001");
 
+        assertThat(report.activityId()).isEqualTo("ACT-001");
+        assertThat(report.activityStartDate()).isEqualTo(LocalDate.of(2027, 5, 11));
+        assertThat(report.activityEndDate()).isEqualTo(LocalDate.of(2027, 8, 10));
+        assertThat(report.configuredResourceCount()).isEqualTo(2);
         assertThat(report.resources()).hasSize(1);
-        assertThat(report.resources().get(0).period()).isEqualTo("Q3 2026");
+        assertThat(report.resources().get(0).attendanceId()).isEqualTo("E1");
     }
 
     // ------------------------------------------------------------------
@@ -403,7 +405,6 @@ class AttendanceQueryServiceTest {
         resource.setName("Sanju");
         setId(resource, 1L);
         ProjectResource assignment = new ProjectResource(resource, "P1", "Dev", LocalDate.of(2020, 1, 1));
-        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(assignment));
         when(projectResourceRepository.findByProjectIdActiveDuring(eq("P1"), any(), any())).thenReturn(List.of(assignment));
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
                 .thenReturn(Optional.of(assignment));
@@ -417,43 +418,6 @@ class AttendanceQueryServiceTest {
         assertThat(report.get(0).rateYear()).isNull();
         assertThat(report.get(0).monthlyRate()).isZero();
         assertThat(report.get(0).cost()).isZero();
-    }
-
-    @Test
-    void quarterlyCostReportUsesCalendarDaysAndQuarterlySettlement() {
-        // Q3 2026 (Jul=31 + Aug=31 + Sep=30 = 92 calendar days). No absence records →
-        // quarterly resolver sees 0 absent dates → totalUnpaidDays=0 → full planned cost.
-        // Planned cost = 88200 × 3 = 264600; totalCost = 264600.
-        MasterResource resource = new MasterResource("E1");
-        resource.setName("Sanju");
-        setId(resource, 1L);
-        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
-        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
-        assignment.setRateYear("Year-3");
-        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
-        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
-        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
-                .thenReturn(Optional.of(assignment));
-        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(any(), any(), any()))
-                .thenReturn(List.of());
-
-        ResourceCostResult report = service.quarterlyCostReport(null, "E1", 2026, 3);
-
-        assertThat(report.resources()).hasSize(1);
-        ResourceCostSummary summary = report.resources().get(0);
-        assertThat(summary.period()).isEqualTo("Q3 2026");
-        assertThat(summary.calendarDays()).isEqualTo(92);
-        assertThat(summary.plannedPeriodCost()).isEqualTo(264600.0);
-        assertThat(summary.unpaidLeaveDays()).isEqualTo(0.0);
-        assertThat(summary.monthlyBreakdown()).hasSize(3);
-        assertThat(summary.totalCost()).isEqualTo(264600.0);
-    }
-
-    @Test
-    void quarterlyCostReportRequiresProjectIdOrResourceId() {
-        assertThatThrownBy(() -> service.quarterlyCostReport(null, null, 2026, 3))
-                .isInstanceOf(BadRequestException.class);
     }
 
     @Test
@@ -540,94 +504,4 @@ class AttendanceQueryServiceTest {
         assertThat(cost.cost()).isEqualTo(82509.68);
     }
 
-    // ------------------------------------------------------------------
-    // Payroll: quarterly leave-policy settlement
-    // ------------------------------------------------------------------
-
-    @Test
-    void quarterlySettlementMapsCalendarQuarterAndReproducesIllustration1() {
-        // Q2 2024 -> Apr/May/Jun. Apr 1,2 + May 1,2,3 + Jun 14 (paid) + Jun 17 (unpaid) -> 1 unpaid.
-        MasterResource resource = new MasterResource("E1");
-        resource.setName("Resource A");
-        setId(resource, 1L);
-        List<Attendance> rows = List.of(
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 5, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 5, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 5, 3), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 6, 14), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 6, 17), AttendanceStatus.A));
-        when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
-                .thenReturn(rows);
-        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-
-        QuarterLeaveReport report = service.quarterlySettlement(2024, 2);
-
-        assertThat(report.quarter()).isEqualTo(2);
-        assertThat(report.quarterStart()).isEqualTo(LocalDate.of(2024, 4, 1));
-        assertThat(report.quarterEnd()).isEqualTo(LocalDate.of(2024, 6, 30));
-        assertThat(report.monthsWithData()).containsExactly(4, 5, 6);
-        assertThat(report.resourceCount()).isEqualTo(1);
-
-        var settlement = report.resources().get(0);
-        assertThat(settlement.employeeName()).isEqualTo("Resource A");
-        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(6.0);
-        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(6.0);
-        assertThat(settlement.calculation().unpaidLeaveDays()).isEqualTo(1.0);
-        assertThat(settlement.calculation().totalUnpaidDays()).isEqualTo(1.0);
-    }
-
-    @Test
-    void quarterlySettlementCarriesForwardUnusedLeaveWhenPolicyAllowsIt() {
-        // Q1 2024 (Jan-Mar): 2 absences -> 4 days lapse (6 allowed - 2 used).
-        // Q2 2024 (Apr-Jun): 4 absences, all paid once the 4-day carry-in is added to the base 6.
-        MasterResource resource = new MasterResource("E1");
-        resource.setName("Resource A");
-        setId(resource, 1L);
-        List<Attendance> q2Rows = List.of(
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 1), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 2), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 3), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 4, 4), AttendanceStatus.A));
-        List<Attendance> q1Rows = List.of(
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 1, 8), AttendanceStatus.A),
-                new Attendance(resource, "P1", null, "M1", null,LocalDate.of(2024, 1, 9), AttendanceStatus.A));
-        when(attendanceRepository.findByAttendanceDateBetween(LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
-                .thenReturn(q2Rows);
-        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                        1L, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 3, 31)))
-                .thenReturn(q1Rows);
-        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
-        when(leavePolicyClient.getLeavePolicy("P1"))
-                .thenReturn(Optional.of(new LeavePolicyResponse(
-                        4, 8, "HALF_DAY", "FULL_DAY", true, true, 6, "QUARTERLY", true, true, true, true)));
-
-        QuarterLeaveReport report = service.quarterlySettlement(2024, 2);
-
-        var settlement = report.resources().get(0);
-        assertThat(settlement.calculation().carriedForwardLeave()).isEqualTo(4);
-        assertThat(settlement.calculation().permissibleLeave()).isEqualTo(10.0); // 6 base + 4 carried in
-        assertThat(settlement.calculation().paidLeaveDays()).isEqualTo(4.0);
-        assertThat(settlement.calculation().unpaidLeaveDays()).isZero();
-    }
-
-    @Test
-    void quarterlySettlementRejectsInvalidQuarter() {
-        assertThatThrownBy(() -> service.quarterlySettlement(2024, 5))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("quarter");
-    }
-
-    @Test
-    void quarterlySettlementFiltersByProjectIdWhenGiven() {
-        when(attendanceRepository.findByProjectIdAndAttendanceDateBetween(
-                        "P1", LocalDate.of(2024, 4, 1), LocalDate.of(2024, 6, 30)))
-                .thenReturn(List.of());
-
-        QuarterLeaveReport report = service.quarterlySettlement(2024, 2, "P1");
-
-        assertThat(report.resourceCount()).isEqualTo(0);
-        verify(attendanceRepository, never()).findByAttendanceDateBetween(any(), any());
-    }
 }

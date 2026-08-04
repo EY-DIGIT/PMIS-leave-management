@@ -1,10 +1,9 @@
 package com.example.leavemanagement.service;
 
+import com.example.leavemanagement.client.ActivityDetailsClient;
+import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
-import com.example.leavemanagement.dto.LeaveReportEntry;
-import com.example.leavemanagement.dto.LeaveReportSummary;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
-import com.example.leavemanagement.dto.QuarterLeaveReport;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
 import com.example.leavemanagement.dto.RelaxationEligibilityResponse;
 import com.example.leavemanagement.entity.Attendance;
@@ -24,6 +23,7 @@ import com.example.leavemanagement.security.CurrentUserContext;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.Period;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -38,7 +38,6 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class LeaveReportService {
 
-    private final AttendanceQueryService attendanceQueryService;
     private final MasterResourceRepository masterResourceRepository;
     private final ProjectResourceRepository projectResourceRepository;
     private final AttendanceRepository attendanceRepository;
@@ -46,17 +45,17 @@ public class LeaveReportService {
     private final QuarterLeaveResolver quarterLeaveResolver;
     private final AttendancePeriodValidator periodValidator;
     private final ProjectYearMappingRepository yearMappingRepository;
+    private final ActivityDetailsClient activityDetailsClient;
 
     public LeaveReportService(
-            AttendanceQueryService attendanceQueryService,
             MasterResourceRepository masterResourceRepository,
             ProjectResourceRepository projectResourceRepository,
             AttendanceRepository attendanceRepository,
             LeaveRelaxationRepository leaveRelaxationRepository,
             QuarterLeaveResolver quarterLeaveResolver,
             AttendancePeriodValidator periodValidator,
-            ProjectYearMappingRepository yearMappingRepository) {
-        this.attendanceQueryService = attendanceQueryService;
+            ProjectYearMappingRepository yearMappingRepository,
+            ActivityDetailsClient activityDetailsClient) {
         this.masterResourceRepository = masterResourceRepository;
         this.projectResourceRepository = projectResourceRepository;
         this.attendanceRepository = attendanceRepository;
@@ -64,61 +63,22 @@ public class LeaveReportService {
         this.quarterLeaveResolver = quarterLeaveResolver;
         this.periodValidator = periodValidator;
         this.yearMappingRepository = yearMappingRepository;
+        this.activityDetailsClient = activityDetailsClient;
     }
 
-    /** The resource's active project assignment, resolved by attendanceId (res_id). */
-    private Optional<ProjectResource> activeAssignment(String attendanceId) {
-        return masterResourceRepository
-                .findByResId(attendanceId)
-                .flatMap(resource -> projectResourceRepository.findByResourceIdAndActiveTrue(resource.getId()));
-    }
-
+    /** Raw activity leave detail, plus any recorded relaxation applied on top. */
     @Transactional(readOnly = true)
-    public LeaveReportSummary quarterlySummary(int year, int quarter, String projectId) {
-        QuarterLeaveReport report = attendanceQueryService.quarterlySettlement(year, quarter, projectId);
-
-        List<LeaveReportEntry> entries = report.resources().stream()
-                .map(settlement -> {
-                    String resourceProjectId = activeAssignment(settlement.attendanceId())
-                            .map(ProjectResource::getProjectId)
-                            .orElse(null);
-                    QuarterLeaveCalculation calc = settlement.calculation();
-                    return new LeaveReportEntry(
-                            settlement.attendanceId(),
-                            settlement.employeeName(),
-                            resourceProjectId,
-                            calc.permissibleLeave(),
-                            calc.leaveDaysTaken(),
-                            calc.paidLeaveDays(),
-                            calc.unpaidLeaveDays(),
-                            calc.sandwichDays(),
-                            calc.totalUnpaidDays(),
-                            calc.lapsedLeaveDays());
-                })
-                .toList();
-
-        return new LeaveReportSummary(
-                report.year(),
-                report.quarter(),
-                report.quarterStart(),
-                report.quarterEnd(),
-                entries.size(),
-                entries);
-    }
-
-    /** Raw quarterly settlement, plus any recorded relaxation applied on top. */
-    @Transactional(readOnly = true)
-    public EmployeeLeaveDetail employeeDetail(String attendanceId, int year, int quarter, String filterProjectId) {
-        return applyRelaxation(rawEmployeeDetail(attendanceId, year, quarter, filterProjectId));
+    public EmployeeLeaveDetail employeeDetail(String attendanceId, String activityId, String filterProjectId) {
+        return applyRelaxation(rawEmployeeDetail(attendanceId, activityId, filterProjectId));
     }
 
     /**
-     * Approves specific unpaid leave dates as relaxation leave for one resource's quarter.
+     * Approves specific unpaid leave dates as relaxation leave for one resource within an activity.
      *
      * <p>Each call adds the selected dates to the cumulative approved set. Dates must be actual
-     * unpaid leave dates for this resource's quarter and must not have been previously approved.
-     * Per-day cost is calculated per month: {@code monthlyRate / calendarDaysInMonth}, so dates
-     * from different months are priced independently.
+     * unpaid leave dates for this resource's activity and must not have been previously approved.
+     * Per-day cost is calculated per month: {@code monthlyRate / calendarDaysInMonth}, so dates from
+     * different months are priced independently.
      */
     @Transactional
     public EmployeeLeaveDetail applyQuarterlyRelaxation(
@@ -129,17 +89,16 @@ public class LeaveReportService {
         }
 
         EmployeeLeaveDetail raw =
-                rawEmployeeDetail(request.resourceId(), request.year(), request.quarter(), request.projectId());
+                rawEmployeeDetail(request.resourceId(), request.activityId(), request.projectId());
 
-        // Validate: every requested date must be an eligible unpaid date (full, half-day, or sandwich).
         Set<LocalDate> eligibleSet = new HashSet<>(raw.unpaidLeaveDates());
         eligibleSet.addAll(raw.unpaidHalfDayDates());
         eligibleSet.addAll(raw.sandwichDates());
         for (LocalDate date : requestedDates) {
             if (!eligibleSet.contains(date)) {
                 throw new BadRequestException(
-                        "Date " + date + " is not an unpaid leave date for this resource in Q"
-                                + request.quarter() + " " + request.year());
+                        "Date " + date + " is not an unpaid leave date for this resource in activity "
+                                + request.activityId());
             }
         }
 
@@ -147,11 +106,10 @@ public class LeaveReportService {
                 .findByResId(request.resourceId())
                 .orElseThrow(() -> new NotFoundException("No resource with res_id " + request.resourceId()));
         LeaveRelaxation relaxation = leaveRelaxationRepository
-                .findByResource_ResIdAndProjectIdAndYearAndQuarter(
-                        request.resourceId(), request.projectId(), request.year(), request.quarter())
-                .orElseGet(() -> new LeaveRelaxation(resource, request.projectId(), request.year(), request.quarter()));
+                .findByResource_ResIdAndProjectIdAndActivityId(
+                        request.resourceId(), request.projectId(), request.activityId())
+                .orElseGet(() -> new LeaveRelaxation(resource, request.projectId(), request.activityId()));
 
-        // Reject dates already approved in a previous call.
         Set<LocalDate> alreadyApproved = new HashSet<>(relaxation.getRelaxationDates());
         List<LocalDate> freshDates = requestedDates.stream()
                 .filter(d -> !alreadyApproved.contains(d))
@@ -162,9 +120,6 @@ public class LeaveReportService {
 
         Set<LocalDate> halfDayUnpaidSet = new HashSet<>(raw.unpaidHalfDayDates());
 
-        // Per-day cost: monthlyRate / calendar-days-in-that-month, rate year resolved per date
-        // from project-year mapping (falls back to the static rateYear on the assignment).
-        // Half-day unpaid dates count as 0.5.
         ProjectResource assignment = projectResourceRepository
                 .findByResource_ResIdAndProjectIdAndActiveTrue(request.resourceId(), request.projectId())
                 .orElse(null);
@@ -184,7 +139,6 @@ public class LeaveReportService {
             }
         }
 
-        // Merge new dates with previously approved ones.
         List<LocalDate> allDates = new ArrayList<>(alreadyApproved);
         allDates.addAll(freshDates);
         allDates.sort(Comparator.naturalOrder());
@@ -219,21 +173,21 @@ public class LeaveReportService {
     }
 
     /**
-     * Returns which unpaid leave dates are still eligible for relaxation approval (not yet
-     * approved), along with the already-approved dates and cost for this resource's quarter.
+     * Returns which unpaid leave dates are still eligible for relaxation approval (not yet approved),
+     * along with the already-approved dates and cost for this resource within the activity.
      */
     @Transactional(readOnly = true)
     public RelaxationEligibilityResponse eligibleRelaxationDates(
-            String resourceId, String projectId, int year, int quarter) {
-        EmployeeLeaveDetail raw = rawEmployeeDetail(resourceId, year, quarter, projectId);
+            String resourceId, String projectId, String activityId) {
+        EmployeeLeaveDetail raw = rawEmployeeDetail(resourceId, activityId, projectId);
 
         List<LocalDate> allUnpaidDates = new ArrayList<>(raw.unpaidLeaveDates());
         allUnpaidDates.addAll(raw.unpaidHalfDayDates());
         allUnpaidDates.addAll(raw.sandwichDates());
-        allUnpaidDates.sort(java.util.Comparator.naturalOrder());
+        allUnpaidDates.sort(Comparator.naturalOrder());
 
         Optional<LeaveRelaxation> existing = leaveRelaxationRepository
-                .findByResource_ResIdAndProjectIdAndYearAndQuarter(resourceId, projectId, year, quarter);
+                .findByResource_ResIdAndProjectIdAndActivityId(resourceId, projectId, activityId);
         List<LocalDate> approvedDates = existing.map(LeaveRelaxation::getRelaxationDates).orElse(List.of());
         double approvedCost = existing.map(LeaveRelaxation::getRelaxationCost).orElse(0.0);
 
@@ -241,7 +195,7 @@ public class LeaveReportService {
         List<LocalDate> eligible = allUnpaidDates.stream().filter(d -> !approvedSet.contains(d)).toList();
 
         return new RelaxationEligibilityResponse(
-                resourceId, projectId, year, quarter,
+                resourceId, projectId, activityId,
                 raw.unpaidLeaveDates(),
                 raw.unpaidHalfDayDates(),
                 raw.sandwichDates(),
@@ -252,32 +206,30 @@ public class LeaveReportService {
     /** Returns the stored evidence attachment for a relaxation record, or throws if none exists. */
     @Transactional(readOnly = true)
     public LeaveRelaxation getRelaxationAttachment(
-            String resourceId, String projectId, int year, int quarter) {
+            String resourceId, String projectId, String activityId) {
         LeaveRelaxation relaxation = leaveRelaxationRepository
-                .findByResource_ResIdAndProjectIdAndYearAndQuarter(resourceId, projectId, year, quarter)
+                .findByResource_ResIdAndProjectIdAndActivityId(resourceId, projectId, activityId)
                 .orElseThrow(() -> new NotFoundException(
-                        "No relaxation record for " + resourceId + " Q" + quarter + " " + year));
+                        "No relaxation record for " + resourceId + " in activity " + activityId));
         if (relaxation.getAttachmentData() == null) {
             throw new NotFoundException("No attachment on this relaxation record");
         }
         return relaxation;
     }
 
-    /** Looks up a recorded relaxation for this resource/project/quarter and applies it, if any. */
+    /** Looks up a recorded relaxation for this resource/project/activity and applies it, if any. */
     private EmployeeLeaveDetail applyRelaxation(EmployeeLeaveDetail raw) {
-        if (raw.projectId() == null) {
-            return raw; // no active assignment -> nothing to look a relaxation up against
+        if (raw.projectId() == null || raw.activityId() == null) {
+            return raw;
         }
         return leaveRelaxationRepository
-                .findByResource_ResIdAndProjectIdAndYearAndQuarter(
-                        raw.attendanceId(), raw.projectId(), raw.year(), raw.quarter())
+                .findByResource_ResIdAndProjectIdAndActivityId(
+                        raw.attendanceId(), raw.projectId(), raw.activityId())
                 .map(relaxation -> applyRelaxation(raw, relaxation))
                 .orElse(raw);
     }
 
     private EmployeeLeaveDetail applyRelaxation(EmployeeLeaveDetail raw, LeaveRelaxation relaxation) {
-        // Cap relaxationDays to the base unpaid leave in case attendance was re-uploaded after the
-        // relaxation record was first saved (prevents negative unpaidLeave in the response).
         double relaxDays = Math.min(relaxation.getRelaxationDays(), raw.unpaidLeave());
         return new EmployeeLeaveDetail(
                 raw.attendanceId(),
@@ -288,10 +240,8 @@ public class LeaveReportService {
                 raw.activityId(),
                 raw.designation(),
                 raw.joiningDate(),
-                raw.year(),
-                raw.quarter(),
-                raw.quarterStart(),
-                raw.quarterEnd(),
+                raw.windowStart(),
+                raw.windowEnd(),
                 raw.permissibleLeave(),
                 raw.carriedForwardLeave(),
                 raw.leaveTaken(),
@@ -320,10 +270,19 @@ public class LeaveReportService {
         return user.email() != null && !user.email().isBlank() ? user.email() : user.username();
     }
 
-    private EmployeeLeaveDetail rawEmployeeDetail(String attendanceId, int year, int quarter, String filterProjectId) {
-        if (quarter < 1 || quarter > 4) {
-            throw new BadRequestException("quarter must be between 1 and 4");
+    private double monthsBetween(LocalDate start, LocalDate end) {
+        Period p = Period.between(start, end.plusDays(1));
+        return p.getYears() * 12 + p.getMonths() + p.getDays() / 30.0;
+    }
+
+    private EmployeeLeaveDetail rawEmployeeDetail(String attendanceId, String activityId, String filterProjectId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
         }
+        LocalDate windowStart = activity.startDate();
+        LocalDate windowEnd = activity.endDate();
 
         Optional<MasterResource> resource = masterResourceRepository.findByResId(attendanceId);
 
@@ -347,16 +306,12 @@ public class LeaveReportService {
         }
 
         String organisationId = assignment != null ? assignment.getOrganisationId() : null;
-        int cycleDay = quarterLeaveResolver.resolveCycleDay(projectId, organisationId);
-        LocalDate quarterStart = quarterLeaveResolver.quarterStart(year, quarter, cycleDay);
-        LocalDate quarterEnd = quarterLeaveResolver.quarterEnd(year, quarter, cycleDay);
 
-        periodValidator.validate(quarterStart, quarterEnd, filterProjectId, attendanceId,
-                "Q" + quarter + " " + year);
+        periodValidator.validate(windowStart, windowEnd, filterProjectId, attendanceId, activityId);
 
         List<Attendance> attendanceRows = resource
                 .map(r -> attendanceRepository.findByResourceIdAndAttendanceDateBetween(
-                        r.getId(), quarterStart, quarterEnd))
+                        r.getId(), windowStart, windowEnd))
                 .orElse(List.of());
 
         Set<LocalDate> absentDates = attendanceRows.stream()
@@ -370,24 +325,21 @@ public class LeaveReportService {
                 .collect(Collectors.toSet());
 
         String milestoneId = null;
-        String activityId  = null;
         for (Attendance row : attendanceRows) {
             if (row.getMilestoneId() != null) milestoneId = row.getMilestoneId();
-            if (row.getActivityId()  != null) activityId  = row.getActivityId();
         }
 
         String projectName = null;
-
         LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
         String employeeName = resource.map(MasterResource::getName)
                 .filter(name -> name != null && !name.isBlank())
                 .orElse(attendanceId);
 
         Long resourceId = resource.map(MasterResource::getId).orElse(null);
-        QuarterLeaveCalculation calc =
-                quarterLeaveResolver.calculate(attendanceId, resourceId, projectId, organisationId,
-                        joiningDate, year, quarter,
-                        absentDates, halfDayDates);
+        double quota = quarterLeaveResolver.activityLeaveQuota(projectId, monthsBetween(windowStart, windowEnd));
+        QuarterLeaveCalculation calc = quarterLeaveResolver.calculateForWindow(
+                attendanceId, resourceId, projectId, organisationId,
+                windowStart, windowEnd, quota, absentDates, halfDayDates);
 
         String designation = assignment != null ? assignment.getRole() : null;
         List<LocalDate> sortedHalfDayDates = halfDayDates.stream().sorted().toList();
@@ -400,10 +352,8 @@ public class LeaveReportService {
                 activityId,
                 designation,
                 joiningDate,
-                year,
-                quarter,
-                quarterStart,
-                quarterEnd,
+                windowStart,
+                windowEnd,
                 calc.permissibleLeave(),
                 calc.carriedForwardLeave(),
                 calc.leaveDaysTaken(),
