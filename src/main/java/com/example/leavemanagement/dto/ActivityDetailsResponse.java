@@ -1,6 +1,8 @@
 package com.example.leavemanagement.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -15,9 +17,9 @@ import java.util.stream.Collectors;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ActivityDetailsResponse(
-        String activityName,
-        LocalDate startDate,
-        LocalDate endDate,
+        @JsonProperty("name") String activityName,
+        @JsonDeserialize(using = LenientLocalDateDeserializer.class) LocalDate startDate,
+        @JsonDeserialize(using = LenientLocalDateDeserializer.class) LocalDate endDate,
         List<ActivityResourceConfig> resources) {
 
     public boolean hasResources() {
