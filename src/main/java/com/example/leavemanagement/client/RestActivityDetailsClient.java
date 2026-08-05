@@ -1,5 +1,6 @@
 package com.example.leavemanagement.client;
 
+import com.example.leavemanagement.dto.ActivityApiResponse;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.security.CurrentUserContext;
 import java.util.Optional;
@@ -37,13 +38,17 @@ public class RestActivityDetailsClient implements ActivityDetailsClient {
     @Override
     public Optional<ActivityDetailsResponse> getActivityDetails(String activityId) {
         try {
-            ActivityDetailsResponse response = restClient
+            ActivityApiResponse response = restClient
                     .get()
                     .uri(baseUrl + "/api/v3/activities/{activityId}", activityId)
                     .headers(this::propagateCallerToken)
                     .retrieve()
-                    .body(ActivityDetailsResponse.class);
-            return Optional.ofNullable(response);
+                    .body(ActivityApiResponse.class);
+
+            Optional<ActivityDetailsResponse> activity = Optional.ofNullable(response)
+                    .map(ActivityApiResponse::data);
+            log.debug("Activity config for activityId={}: {}", activityId, activity.orElse(null));
+            return activity;
         } catch (RestClientException e) {
             log.warn("Projects service activity call failed for activityId={}: {}", activityId, e.getMessage(), e);
             return Optional.empty();
