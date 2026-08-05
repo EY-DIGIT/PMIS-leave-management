@@ -33,44 +33,44 @@ public class RestLeavePolicyClient implements LeavePolicyClient {
         this.restClient = restClientBuilder.build();
         this.baseUrl = baseUrl;
     }
-//     @Override
-//    public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
-//        try {
-//            ProjectApiResponse response = restClient
-//                    .get()
-//                    .uri(baseUrl + "/api/v3/projects/{projectId}", projectId)
-//                    .headers(this::propagateCallerToken)
-//                    .retrieve()
-//                    .body(ProjectApiResponse.class);
-//
-//            Optional<LeavePolicyResponse> leaveConfig = Optional.ofNullable(response)
-//                    .map(ProjectApiResponse::data)
-//                    .map(ProjectApiResponse.ProjectData::leaveConfig);
-//            log.debug("Leave policy for projectId={}: {}", projectId, leaveConfig.orElse(null));
-//            return leaveConfig;
-//        } catch (RestClientException e) {
-//            log.warn("Projects service call failed for projectId={}: {}", projectId, e.getMessage(), e);
-//            return Optional.empty();
-//        }
-//    }
+     @Override
+    public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
+        try {
+            ProjectApiResponse response = restClient
+                    .get()
+                    .uri(baseUrl + "/api/v3/projects/{projectId}", projectId)
+                    .headers(this::propagateCallerToken)
+                    .retrieve()
+                    .body(ProjectApiResponse.class);
 
-   @Override
-   public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
-       return Optional.of(new LeavePolicyResponse(
-               4,           // halfDay (hours)
-               8,           // fullDay (hours)
-               "false",     // saturdayWorking
-               "false",     // sundayWorking
-               true,        // attendanceCaptured
-               true,        // sandwichLeaveApplied
-               6,           // leavesPerFrequencyCount
-               "QUARTERLY",   // leavesFrequency
-               true,        // proratedLeavesApplied
-               false,       // carryForwardAllowed
-               true,        // leaveLapseAtQuarterEnd
-               true         // automaticBalanceReset
-       ));
-   }
+            Optional<LeavePolicyResponse> leaveConfig = Optional.ofNullable(response)
+                    .map(ProjectApiResponse::data)
+                    .map(ProjectApiResponse.ProjectData::leaveConfig);
+            log.debug("Leave policy for projectId={}: {}", projectId, leaveConfig.orElse(null));
+            return leaveConfig;
+        } catch (RestClientException e) {
+            log.warn("Projects service call failed for projectId={}: {}", projectId, e.getMessage(), e);
+            return Optional.empty();
+        }
+    }
+
+//   @Override
+//   public Optional<LeavePolicyResponse> getLeavePolicy(String projectId) {
+//       return Optional.of(new LeavePolicyResponse(
+//               4,           // halfDay (hours)
+//               8,           // fullDay (hours)
+//               "false",     // saturdayWorking
+//               "false",     // sundayWorking
+//               true,        // attendanceCaptured
+//               true,        // sandwichLeaveApplied
+//               6,           // leavesPerFrequencyCount
+//               "QUARTERLY",   // leavesFrequency
+//               true,        // proratedLeavesApplied
+//               false,       // carryForwardAllowed
+//               true,        // leaveLapseAtQuarterEnd
+//               true         // automaticBalanceReset
+//       ));
+//   }
 
 
     /** Forwards the current request's bearer token — the projects service requires one. */
