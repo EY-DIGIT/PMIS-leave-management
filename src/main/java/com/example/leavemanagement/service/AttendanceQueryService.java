@@ -123,9 +123,19 @@ public class AttendanceQueryService {
             String rateYear,
             MultipartFile file) {
         validatePeriod(startDate, endDate);
-        ActivityDetailsResponse activity = (activityId != null && !activityId.isBlank())
-                ? activityDetailsClient.getActivityDetails(activityId).orElse(null)
-                : null;
+        ActivityDetailsResponse activity = null;
+        if (activityId != null && !activityId.isBlank()) {
+            activity = activityDetailsClient.getActivityDetails(activityId)
+                    .orElseThrow(() -> new BadRequestException(
+                            "Activity configuration could not be retrieved for activityId '" + activityId
+                                    + "' from the projects Activity API (it may not exist or the service is "
+                                    + "unavailable). Attendance upload aborted."));
+            if (!activity.hasResources()) {
+                throw new BadRequestException(
+                        "The Activity API returned no designation configuration for activityId '" + activityId
+                                + "'. Attendance cannot be validated against the activity, so the upload is aborted.");
+            }
+        }
         if (activity != null && activity.startDate() != null && activity.endDate() != null) {
             if (startDate.isBefore(activity.startDate()) || endDate.isAfter(activity.endDate())) {
                 throw new BadRequestException(
