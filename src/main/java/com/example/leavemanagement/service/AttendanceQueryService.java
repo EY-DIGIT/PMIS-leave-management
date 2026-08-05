@@ -761,7 +761,11 @@ public class AttendanceQueryService {
                 new HashSet<>(calc.unpaidLeaveDates()), new HashSet<>(calc.unpaidHalfDayDates()));
     }
 
-    /** Resource cost for a single activity, scoped to the activity's execution window. */
+    /**
+     * Resource cost for a single activity, scoped to the activity's execution window. Each resource's
+     * {@code monthlyBreakdown} is split into monthly attendance cycles aligned to the activity start
+     * day (e.g. start 07-Jan → 07-Jan..06-Feb, 07-Feb..06-Mar, … up to the activity end date).
+     */
     @Transactional(readOnly = true)
     public ResourceCostResult activityCostReport(String projectId, String activityId) {
         ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
@@ -769,7 +773,76 @@ public class AttendanceQueryService {
         if (activity.startDate() == null || activity.endDate() == null) {
             throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
         }
-        return periodCostReport(projectId, null, activity.startDate(), activity.endDate());
+        LocalDate aStart = activity.startDate();
+        LocalDate aEnd = activity.endDate();
+        String periodLabel = aStart.format(PERIOD_DATE_FMT) + " to " + aEnd.format(PERIOD_DATE_FMT);
+        List<LocalDate[]> cycles = monthlyCycles(aStart, aEnd);
+        List<ResourceCostSummary> rows = latestAssignmentsActiveDuring(projectId, aStart, aEnd).stream()
+                .map(ProjectResource::getResource)
+                .map(resource -> buildActivityCostSummary(
+                        resource, projectId, activityId, aStart, aEnd, cycles, periodLabel))
+                .toList();
+        return new ResourceCostResult(periodLabel, rows.size(), buildCostTotals(rows), rows);
+    }
+
+    /** Monthly attendance cycles from {@code start}, each start-day..(next start-day − 1), clamped to {@code end}. */
+    private List<LocalDate[]> monthlyCycles(LocalDate start, LocalDate end) {
+        List<LocalDate[]> cycles = new ArrayList<>();
+        LocalDate cursor = start;
+        while (!cursor.isAfter(end)) {
+            LocalDate cycleEnd = cursor.plusMonths(1).minusDays(1);
+            if (cycleEnd.isAfter(end)) {
+                cycleEnd = end;
+            }
+            cycles.add(new LocalDate[] {cursor, cycleEnd});
+            cursor = cursor.plusMonths(1);
+        }
+        return cycles;
+    }
+
+    private ResourceCostSummary buildActivityCostSummary(
+            MasterResource resource, String projectId, String activityId,
+            LocalDate aStart, LocalDate aEnd, List<LocalDate[]> cycles, String periodLabel) {
+        QuarterLeaveCalculation calc = leaveForWindow(resource, projectId, aStart, aEnd);
+        Set<LocalDate> unpaidFull = new HashSet<>(calc.unpaidLeaveDates());
+        Set<LocalDate> unpaidHalf = new HashSet<>(calc.unpaidHalfDayDates());
+
+        List<MonthlyResourceCost> monthly = cycles.stream()
+                .map(c -> buildMonthlyCost(resource, projectId, c[0], c[1],
+                        c[0].format(PERIOD_DATE_FMT) + " to " + c[1].format(PERIOD_DATE_FMT),
+                        unpaidFull, unpaidHalf))
+                .toList();
+
+        int totalCalendarDays = monthly.stream().mapToInt(MonthlyResourceCost::calendarDays).sum();
+        double totalPlannedCost = monthly.stream().mapToDouble(m -> m.cost() + m.deductedAmount()).sum();
+        double totalUnpaidLeaveDays = monthly.stream().mapToDouble(MonthlyResourceCost::unpaidLeaveDays).sum();
+        double totalDeductedAmount = monthly.stream().mapToDouble(MonthlyResourceCost::deductedAmount).sum();
+
+        double relaxationDays = 0;
+        double relaxationCostVal = 0;
+        if (projectId != null && activityId != null) {
+            LeaveRelaxation relaxation = leaveRelaxationRepository
+                    .findByResource_ResIdAndProjectIdAndActivityId(resource.getResId(), projectId, activityId)
+                    .orElse(null);
+            if (relaxation != null) {
+                relaxationDays = relaxation.getRelaxationDays();
+                relaxationCostVal = relaxation.getRelaxationCost();
+            }
+        }
+
+        double perDayCost = totalCalendarDays > 0 ? round2(totalPlannedCost / totalCalendarDays) : 0d;
+        double paidCalDays = totalCalendarDays - totalUnpaidLeaveDays;
+        double deductedAmount = round2(totalDeductedAmount);
+        double periodCost = round2(totalPlannedCost - totalDeductedAmount);
+        double totalCost = round2(periodCost + relaxationCostVal);
+
+        return new ResourceCostSummary(
+                resource.getResId(), resource.getName(), projectId, periodLabel,
+                totalCalendarDays, round2(totalPlannedCost), perDayCost,
+                totalUnpaidLeaveDays, round2(paidCalDays), round2(paidCalDays),
+                deductedAmount, periodCost,
+                relaxationDays, round2(relaxationCostVal), totalCost,
+                monthly);
     }
 
     /**
@@ -875,6 +948,7 @@ public class AttendanceQueryService {
                 paidLeaveDaysMonthly,
                 calendarDays,
                 unpaidLeaveDays,
+                round2(paidCalendarDays),
                 round2(paidCalendarDays),
                 rate,
                 perDayRate,
@@ -1190,6 +1264,7 @@ public class AttendanceQueryService {
                 workingDays, presentDays, halfDays, absentDays,
                 leaveCalc.paidLeaveDays(),
                 calendarDays, unpaidLeaveDays, round2(calendarDays - unpaidLeaveDays),
+                round2(calendarDays - unpaidLeaveDays),
                 monthlyRate != null ? monthlyRate : 0d,
                 perDayCost, deductedAmount, periodCost);
 
@@ -1197,6 +1272,7 @@ public class AttendanceQueryService {
                 resource.getResId(), resource.getName(), projectId, periodLabel,
                 calendarDays, round2(totalPlannedCost), perDayCost,
                 unpaidLeaveDays, round2(calendarDays - unpaidLeaveDays),
+                round2(calendarDays - unpaidLeaveDays),
                 deductedAmount, periodCost,
                 relaxationDays, round2(relaxationCostVal), totalCost,
                 List.of(periodEntry));

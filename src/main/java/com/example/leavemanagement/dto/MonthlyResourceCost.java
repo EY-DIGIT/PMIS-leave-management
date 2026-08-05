@@ -32,6 +32,7 @@ public record MonthlyResourceCost(
         int calendarDays,
         double unpaidLeaveDays,
         double paidCalendarDays,
+        double billableDays,
         double monthlyRate,
         double perDayRate,
         double deductedAmount,

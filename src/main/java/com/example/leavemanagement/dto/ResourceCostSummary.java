@@ -27,6 +27,7 @@ public record ResourceCostSummary(
         double perDayCost,
         double unpaidLeaveDays,
         double paidCalendarDays,
+        double billableDays,
         double deductedAmount,
         double periodCost,
         double relaxationDays,

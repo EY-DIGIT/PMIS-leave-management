@@ -249,6 +249,39 @@ class AttendanceQueryServiceTest {
         verify(projectResourceRepository).save(assignment);
     }
 
+    @Test
+    void uploadRejectsWhenPeriodExceedsDesignationPlannedDuration() {
+        // Activity 11-Jan-2026..10-Apr-2026; designation duration 2 months → planned end 10-Mar-2026.
+        // Uploading a period ending 10-Apr-2026 for that designation must be rejected.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Hardik");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(
+                resource, "P1", "Application Security Engineer", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(parser.parse(any(), any(), any())).thenReturn(List.of(new EmployeeAttendanceByDate(
+                "E1", "Hardik", "Application Security Engineer", Set.of(), Map.of())));
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.of(
+                new LeavePolicyResponse(4, 8, "HALF_DAY", "FULL_DAY", true, true, 2, "MONTHLY", true, false, true, true)));
+        when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9",
+                        LocalDate.of(2026, 1, 11), LocalDate.of(2026, 4, 10),
+                        List.of(new ActivityResourceConfig("Application Security Engineer", 1, 2.0, 136064.0)))));
+
+        assertThatThrownBy(() -> service.upload(
+                        "P1", "Org1", "M1", "ACT-001",
+                        LocalDate.of(2026, 3, 11), LocalDate.of(2026, 4, 10), null, anyFile()))
+                .isInstanceOf(AttendanceValidationException.class)
+                .satisfies(ex -> assertThat(((AttendanceValidationException) ex).getErrors())
+                        .anySatisfy(msg -> assertThat(msg)
+                                .contains("planned duration of 2.0 month(s)")
+                                .contains("beyond the planned end 2026-03-10")));
+        verify(attendanceRepository, never()).save(any());
+    }
+
     // ------------------------------------------------------------------
     // Reports
     // ------------------------------------------------------------------
