@@ -3,6 +3,7 @@ package com.example.leavemanagement.service;
 import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportSummary;
@@ -467,6 +468,60 @@ public class AttendanceQueryService {
                 reportStart, reportEnd, calendarDays,
                 configuredCount, uploadedResources.size(),
                 buildAttendanceTotals(rows, calendarDays), rows);
+    }
+
+    /**
+     * Resource-replacement summary for one activity. A designation is "replaced" whenever more
+     * distinct resources worked it (across the whole activity window) than its configured quantity:
+     * {@code replacementCount = max(0, distinctResourceCount - configuredQuantity)}. Derived live from
+     * the resources that actually have attendance under the activity — no separate history table.
+     */
+    @Transactional(readOnly = true)
+    public ActivityReplacementReport activityReplacements(String projectId, String activityId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
+        }
+        String activityName = activity.activityName() != null ? activity.activityName() : activityId;
+        Map<String, Integer> required = activity.requiredByDesignation();
+
+        List<MasterResource> resources = attendanceRepository
+                .findDistinctResourcesByActivityIdAndDateBetween(activityId, activity.startDate(), activity.endDate());
+
+        Map<String, List<ActivityReplacementReport.ReplacementResource>> byDesignation = new LinkedHashMap<>();
+        for (MasterResource resource : resources) {
+            ProjectResource assignment = resolveAssignmentForProject(resource.getResId(), projectId);
+            String designation = assignment != null ? assignment.getRole() : "(unassigned)";
+            byDesignation.computeIfAbsent(designation, d -> new ArrayList<>())
+                    .add(new ActivityReplacementReport.ReplacementResource(
+                            resource.getResId(),
+                            resource.getName(),
+                            assignment != null ? assignment.getAssignmentStartDate() : null,
+                            assignment != null ? assignment.getAssignmentEndDate() : null,
+                            assignment != null && assignment.isActive()));
+        }
+
+        int totalReplacements = 0;
+        List<ActivityReplacementReport.DesignationReplacement> designations = new ArrayList<>();
+        for (Map.Entry<String, List<ActivityReplacementReport.ReplacementResource>> entry : byDesignation.entrySet()) {
+            List<ActivityReplacementReport.ReplacementResource> members = entry.getValue().stream()
+                    .sorted(Comparator.comparing(
+                            ActivityReplacementReport.ReplacementResource::joiningDate,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .toList();
+            int configuredQuantity = required.getOrDefault(entry.getKey(), 0);
+            int distinctResourceCount = members.size();
+            int replacementCount = Math.max(0, distinctResourceCount - configuredQuantity);
+            totalReplacements += replacementCount;
+            designations.add(new ActivityReplacementReport.DesignationReplacement(
+                    entry.getKey(), configuredQuantity, distinctResourceCount, replacementCount, members));
+        }
+
+        return new ActivityReplacementReport(
+                activityId, activityName, projectId,
+                activity.startDate(), activity.endDate(),
+                totalReplacements, designations);
     }
 
     private AttendanceReportResult scopedReport(

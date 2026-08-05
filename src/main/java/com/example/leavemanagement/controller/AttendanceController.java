@@ -1,6 +1,7 @@
 package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
@@ -174,6 +175,23 @@ public class AttendanceController {
             @Parameter(description = "Milestone id") @RequestParam String milestoneId,
             @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
         return attendanceQueryService.activityReport(projectId, milestoneId, activityId);
+    }
+
+    /**
+     * Resource-replacement summary for one activity, per designation.
+     * GET /api/attendance/report/activity/replacements?projectId=&activityId=
+     */
+    @Operation(
+            summary = "Activity resource-replacement report",
+            description = "Per-designation replacement summary for the activity. A replacement is counted "
+                    + "whenever more distinct resources worked a designation across the activity window than "
+                    + "its configured quantity (replacementCount = distinctResourceCount - configuredQuantity). "
+                    + "Derived live from uploaded attendance; 'totalReplacements' is the activity-wide total.")
+    @GetMapping("/report/activity/replacements")
+    public ActivityReplacementReport activityReplacements(
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
+        return attendanceQueryService.activityReplacements(projectId, activityId);
     }
 
     /**
