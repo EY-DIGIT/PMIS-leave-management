@@ -775,8 +775,15 @@ public class AttendanceQueryService {
         }
         LocalDate aStart = activity.startDate();
         LocalDate aEnd = activity.endDate();
+        // Only include monthly cycles that have actually been uploaded: bound by the latest
+        // attendance date for this activity, so the breakup grows month-by-month with each upload.
+        LocalDate maxUploaded = attendanceRepository
+                .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(null);
         String periodLabel = aStart.format(PERIOD_DATE_FMT) + " to " + aEnd.format(PERIOD_DATE_FMT);
-        List<LocalDate[]> cycles = monthlyCycles(aStart, aEnd);
+        List<LocalDate[]> cycles = maxUploaded == null ? List.of()
+                : monthlyCycles(aStart, aEnd).stream()
+                        .filter(cycle -> !cycle[0].isAfter(maxUploaded))
+                        .toList();
         List<ResourceCostSummary> rows = latestAssignmentsActiveDuring(projectId, aStart, aEnd).stream()
                 .map(ProjectResource::getResource)
                 .map(resource -> buildActivityCostSummary(
