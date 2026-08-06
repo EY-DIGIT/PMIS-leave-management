@@ -79,6 +79,7 @@ public class QuarterLeaveResolver {
             Long resourceId,
             String projectId,
             String organisationId,
+            LocalDate joiningDate,
             LocalDate windowStart,
             LocalDate windowEnd,
             double permissibleQuota,
@@ -95,7 +96,7 @@ public class QuarterLeaveResolver {
                 : computeRemainingFromChain(predecessorChain, windowStart, windowEnd, holidays, permissibleQuota);
 
         return policy.compute(
-                windowStart, windowEnd, null,
+                windowStart, windowEnd, joiningDate,
                 absentDates, halfDayDates,
                 holidays, effectiveQuota, 0);
     }
@@ -165,7 +166,7 @@ public class QuarterLeaveResolver {
                     .filter(a -> a.getStatus() == AttendanceStatus.HD)
                     .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
             QuarterLeaveCalculation predCalc = policy.compute(
-                    windowStart, windowEnd, null,
+                    windowStart, windowEnd, pr.getAssignmentStartDate(),
                     predAbsent, predHalfDays, holidays, remaining, 0);
             remaining = Math.max(0.0, remaining - predCalc.paidLeaveDays());
         }

@@ -339,7 +339,7 @@ public class LeaveReportService {
         double quota = quarterLeaveResolver.activityLeaveQuota(projectId, monthsBetween(windowStart, windowEnd));
         QuarterLeaveCalculation calc = quarterLeaveResolver.calculateForWindow(
                 attendanceId, resourceId, projectId, organisationId,
-                windowStart, windowEnd, quota, absentDates, halfDayDates);
+                joiningDate, windowStart, windowEnd, quota, absentDates, halfDayDates);
 
         String designation = assignment != null ? assignment.getRole() : null;
         List<LocalDate> sortedHalfDayDates = halfDayDates.stream().sorted().toList();

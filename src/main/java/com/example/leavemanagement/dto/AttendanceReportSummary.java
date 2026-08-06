@@ -28,4 +28,5 @@ public record AttendanceReportSummary(
         double attendancePercentage,
         double leaveTaken,
         double paidLeaveDays,
-        double unpaidLeaveDays) {}
+        double unpaidLeaveDays,
+        int sandwichDays) {}

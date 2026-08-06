@@ -384,6 +384,45 @@ class AttendanceQueryServiceTest {
         assertThat(report.resources().get(0).attendanceId()).isEqualTo("E1");
     }
 
+    @Test
+    void activityReportProratesPermissibleLeaveForMidActivityJoiner() {
+        // Activity 07-Jan..06-Apr-2026 (90 days), quota 6. Resource joins 05-Feb → prorated quota
+        // round(6 × 61/90) = 4. With 6 full-day absences → paid 4, unpaid 2 (not paid 6).
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Neha");
+        setId(resource, 1L);
+        ProjectResource assignment = new ProjectResource(
+                resource, "P1", "Architect Dev Ops Automation", LocalDate.of(2026, 2, 5));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6),
+                        List.of(new ActivityResourceConfig("Architect Dev Ops Automation", 2, 3.0, 211982.0)))));
+        when(attendanceRepository.findMinDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(List.of(resource));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.empty());
+        List<Attendance> absences = List.of(
+                new Attendance(resource, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 9), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 10), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 11), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 12), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 13), AttendanceStatus.A),
+                new Attendance(resource, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 17), AttendanceStatus.A));
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
+                .thenReturn(absences);
+
+        ActivityAttendanceReportResult report = service.activityReport("P1", "M1", "ACT-001");
+        AttendanceReportSummary s = report.resources().get(0);
+
+        assertThat(s.paidLeaveDays()).isEqualTo(4.0);
+        assertThat(s.unpaidLeaveDays()).isEqualTo(2.0);
+    }
+
     // ------------------------------------------------------------------
     // Resource cost calculator
     // ------------------------------------------------------------------

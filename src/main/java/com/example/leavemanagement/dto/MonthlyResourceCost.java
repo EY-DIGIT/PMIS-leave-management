@@ -31,9 +31,13 @@ public record MonthlyResourceCost(
         // Calendar-days cost calculation
         int calendarDays,
         double unpaidLeaveDays,
+        int sandwichLeave,
+        double relaxationDays,
+        double totalUnpaidDays,
         double paidCalendarDays,
         double billableDays,
         double monthlyRate,
         double perDayRate,
         double deductedAmount,
+        double relaxationCost,
         double cost) {}
