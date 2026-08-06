@@ -629,13 +629,14 @@ public class AttendanceQueryService {
     }
 
     /**
-     * Converts the leave policy to a limit for the given number of months.
-     * Monthly policy × numberOfMonths: e.g. 2/month × 3 = 6 for a quarter.
+     * Permissible paid-leave limit for a window of {@code numberOfMonths} months — the project's
+     * quarterly allowance prorated to the window (6 per quarter by default when the policy has no
+     * explicit count). Uses the same basis as {@link QuarterLeaveResolver#activityLeaveQuota} so the
+     * attendance report's paid/unpaid split stays consistent with the leave-dates and cost reports.
      */
     private int resolveLeaveLimit(String projectId, int numberOfMonths) {
         if (projectId == null || projectId.isBlank()) return 0;
-        Optional<LeavePolicyResponse> policy = leavePolicyClient.getLeavePolicy(projectId);
-        return resolveMonthlyLeaveAllowance(projectId, policy) * numberOfMonths;
+        return (int) Math.round(quarterLeaveResolver.activityLeaveQuota(projectId, numberOfMonths));
     }
 
     private AttendanceReportSummary buildSummary(
@@ -961,26 +962,6 @@ public class AttendanceQueryService {
                 perDayRate,
                 deductedAmount,
                 cost);
-    }
-
-    /**
-     * Monthly paid-leave allowance per resource: uses {@code leavesPerFrequencyCount} directly
-     * when {@code leavesFrequency=MONTHLY}; divides quarterly/yearly counts proportionally.
-     * Falls back to 0 (no policy = no credit).
-     */
-    private int resolveMonthlyLeaveAllowance(String projectId, Optional<LeavePolicyResponse> leavePolicy) {
-        Integer count = leavePolicy.map(LeavePolicyResponse::leavesPerFrequencyCount).orElse(null);
-        if (count != null) {
-            String frequency = leavePolicy.map(LeavePolicyResponse::leavesFrequency).orElse(null);
-            if (frequency == null) return count;
-            return switch (frequency.trim().toUpperCase(Locale.ENGLISH)) {
-                case "MONTHLY" -> count;
-                case "QUARTERLY" -> Math.round(count / 3f);
-                case "YEARLY", "ANNUALLY", "ANNUAL" -> Math.round(count / 12f);
-                default -> count;
-            };
-        }
-        return 0;
     }
 
     /**
