@@ -356,7 +356,7 @@ public class LeaveReportService {
                 windowEnd,
                 calc.permissibleLeave(),
                 calc.carriedForwardLeave(),
-                calc.leaveDaysTaken(),
+                calc.paidLeaveDays() + calc.unpaidLeaveDays() + calc.sandwichDays(),
                 calc.paidLeaveDays(),
                 calc.unpaidLeaveDays(),
                 0.0,

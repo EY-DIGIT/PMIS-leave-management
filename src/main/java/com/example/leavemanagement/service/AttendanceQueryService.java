@@ -731,11 +731,12 @@ public class AttendanceQueryService {
 
         double presentDays = presentDaysRaw + halfDays * 0.5;
 
-        double effectiveAbsent = absentDays + halfDays * 0.5;
         QuarterLeaveCalculation calc = leaveForWindow(resource, projectId, leaveStart, leaveEnd);
         double paidLeaveDays   = calc.paidLeaveDays();
         double unpaidLeaveDays = calc.unpaidLeaveDays();
         int sandwichDays       = calc.sandwichDays();
+        // Total leave taken = paid + unpaid + sandwich (sandwich-charged holiday/weekend days included).
+        double leaveTaken = paidLeaveDays + unpaidLeaveDays + sandwichDays;
 
         double attendancePercentage = workingDays > 0
                 ? Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0
@@ -765,7 +766,7 @@ public class AttendanceQueryService {
                 holidayDays,
                 wfhDays,
                 attendancePercentage,
-                effectiveAbsent,
+                leaveTaken,
                 paidLeaveDays,
                 unpaidLeaveDays,
                 sandwichDays);
@@ -1175,9 +1176,11 @@ public class AttendanceQueryService {
                 resource.getResId(), resource.getId(), projectId, orgId,
                 joiningDate, effectiveStart, effectiveEnd, quota, absentSet, halfDaySet);
 
-        double effectiveAbsent = absentDays + halfDays * 0.5;
         double paidLeaveDays = leaveCalc.paidLeaveDays();
         double unpaidLeaveDays = leaveCalc.unpaidLeaveDays();
+        int sandwichDays = leaveCalc.sandwichDays();
+        // Total leave taken = paid + unpaid + sandwich.
+        double leaveTaken = paidLeaveDays + unpaidLeaveDays + sandwichDays;
         double attendancePercentage = workingDays > 0
                 ? Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0
                 : 0d;
@@ -1188,7 +1191,7 @@ public class AttendanceQueryService {
                 milestoneId, activityId, joiningDate, lastWorkingDate, active,
                 periodLabel, start, end, calendarDays, workingDays, presentDays, halfDays,
                 leaveDays, absentDays, weekOffDays, holidayDays, wfhDays, attendancePercentage,
-                effectiveAbsent, paidLeaveDays, unpaidLeaveDays, leaveCalc.sandwichDays());
+                leaveTaken, paidLeaveDays, unpaidLeaveDays, sandwichDays);
     }
 
     /**
