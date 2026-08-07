@@ -757,7 +757,7 @@ public class AttendanceQueryService {
      * day (e.g. start 07-Jan → 07-Jan..06-Feb, 07-Feb..06-Mar, … up to the activity end date).
      */
     @Transactional(readOnly = true)
-    public ResourceCostResult activityCostReport(String projectId, String activityId) {
+    public ResourceCostResult activityCostReport(String projectId, String activityId, String resourceId) {
         ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
                 .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
         if (activity.startDate() == null || activity.endDate() == null) {
@@ -774,8 +774,10 @@ public class AttendanceQueryService {
                 : monthlyCycles(aStart, aEnd).stream()
                         .filter(cycle -> !cycle[0].isAfter(maxUploaded))
                         .toList();
+        boolean hasResourceFilter = resourceId != null && !resourceId.isBlank();
         List<ResourceCostSummary> rows = latestAssignmentsActiveDuring(projectId, aStart, aEnd).stream()
                 .map(ProjectResource::getResource)
+                .filter(resource -> !hasResourceFilter || resourceId.equals(resource.getResId()))
                 .map(resource -> buildActivityCostSummary(
                         resource, projectId, activityId, aStart, aEnd, cycles, periodLabel))
                 .toList();

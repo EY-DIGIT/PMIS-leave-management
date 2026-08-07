@@ -59,18 +59,21 @@ public class ResourceCostController {
     /**
      * Activity cost: one summary per resource active during the activity, scoped to the activity's
      * execution window (fetched live from PMIS). Planned cost tracks monthlyRate x duration.
-     * GET /api/attendance/cost/activity?projectId=&activityId=
+     * GET /api/attendance/cost/activity?projectId=&activityId=&resourceId=
      */
     @Operation(
             summary = "Activity resource cost report",
             description = "One ResourceCostSummary per resource active during the activity's start/end window. "
                     + "Per-day rate = monthlyRate / calendarDaysInMonth per month segment; unpaid-leave "
-                    + "deductions and relaxation additions apply only within the uploaded periods.")
+                    + "deductions and relaxation additions apply only within the uploaded periods. "
+                    + "Pass resourceId to return only that resource's cost.")
     @GetMapping("/activity")
     public ResourceCostResult activityCostReport(
             @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
-            @Parameter(description = "Activity id from PMIS") @RequestParam("activityId") String activityId) {
-        return attendanceQueryService.activityCostReport(projectId, activityId);
+            @Parameter(description = "Activity id from PMIS") @RequestParam("activityId") String activityId,
+            @Parameter(description = "res_id to return a single resource's cost (optional)")
+                    @RequestParam(value = "resourceId", required = false) String resourceId) {
+        return attendanceQueryService.activityCostReport(projectId, activityId, resourceId);
     }
 
     /**
