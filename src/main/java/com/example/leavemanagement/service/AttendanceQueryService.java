@@ -4,6 +4,7 @@ import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
+import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceReportSummary;
@@ -35,6 +36,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -462,7 +464,7 @@ public class AttendanceQueryService {
                     boolean active        = assignment != null && assignment.isActive();
                     LocalDate lastDate    = assignment != null ? assignment.getAssignmentEndDate() : null;
                     return buildSummary(resource, projectId, reportStart, reportEnd, periodLabel,
-                            designation, joiningDate, active, lastDate);
+                            designation, joiningDate, active, lastDate, aStart, aEnd);
                 })
                 .toList();
 
@@ -527,6 +529,59 @@ public class AttendanceQueryService {
                 activityId, activityName, projectId,
                 activity.startDate(), activity.endDate(),
                 totalReplacements, designations);
+    }
+
+    /**
+     * Resource history for a project + designation (+ optional organisation): every resource holding
+     * that designation, each with the list of activities they worked and the period worked on each
+     * (assignment window ∩ activity window) plus current status. Lets the UI see who has worked a
+     * designation before deciding whether an uploaded resource is a continuation, a new deployment, or
+     * a replacement.
+     */
+    @Transactional(readOnly = true)
+    public ActivityResourceDetailsReport resourceDetailsByDesignation(
+            String projectId, String designation, String organisationId) {
+        boolean hasOrg = organisationId != null && !organisationId.isBlank();
+        Map<Long, ProjectResource> latestByResource = new LinkedHashMap<>();
+        projectResourceRepository.findByProjectIdAndRole(projectId, designation).stream()
+                .filter(a -> !hasOrg || organisationId.equals(a.getOrganisationId()))
+                .sorted(Comparator.comparing(ProjectResource::getAssignmentStartDate,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .forEach(a -> latestByResource.put(a.getResource().getId(), a));
+
+        Map<String, Optional<ActivityDetailsResponse>> activityCache = new HashMap<>();
+        List<ActivityResourceDetailsReport.ResourceHistory> resources = new ArrayList<>();
+        for (ProjectResource assignment : latestByResource.values()) {
+            MasterResource resource = assignment.getResource();
+            LocalDate assignStart = assignment.getAssignmentStartDate();
+            LocalDate assignEnd = assignment.getAssignmentEndDate();
+            String status = assignment.isActive() ? "Active" : "Completed";
+
+            List<ActivityResourceDetailsReport.ActivityWork> works = new ArrayList<>();
+            for (String activityId : attendanceRepository.findDistinctActivityIdsByResourceId(resource.getId())) {
+                ActivityDetailsResponse activity = activityCache
+                        .computeIfAbsent(activityId, id -> activityDetailsClient.getActivityDetails(id))
+                        .orElse(null);
+                if (activity == null || activity.startDate() == null || activity.endDate() == null) {
+                    continue;
+                }
+                LocalDate aStart = activity.startDate();
+                LocalDate aEnd = activity.endDate();
+                LocalDate workedFrom = (assignStart != null && assignStart.isAfter(aStart)) ? assignStart : aStart;
+                LocalDate workedTo = (assignEnd != null && assignEnd.isBefore(aEnd)) ? assignEnd : aEnd;
+                works.add(new ActivityResourceDetailsReport.ActivityWork(
+                        activityId,
+                        activity.activityName() != null ? activity.activityName() : activityId,
+                        aStart, aEnd, workedFrom, workedTo, status));
+            }
+            works.sort(Comparator.comparing(
+                    ActivityResourceDetailsReport.ActivityWork::activityStartDate,
+                    Comparator.nullsLast(Comparator.naturalOrder())));
+            resources.add(new ActivityResourceDetailsReport.ResourceHistory(
+                    resource.getResId(), resource.getName(), works));
+        }
+
+        return new ActivityResourceDetailsReport(projectId, organisationId, designation, resources);
     }
 
     private AttendanceReportResult scopedReport(
@@ -625,6 +680,21 @@ public class AttendanceQueryService {
     private AttendanceReportSummary buildSummary(
             MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel,
             String designation, LocalDate joiningDate, boolean active, LocalDate lastWorkingDate) {
+        // Default: leave is computed over the same window shown (monthly/yearly/period reports).
+        return buildSummary(resource, projectId, start, end, periodLabel,
+                designation, joiningDate, active, lastWorkingDate, start, end);
+    }
+
+    /**
+     * {@code leaveStart}/{@code leaveEnd} is the window the leave quota + paid/unpaid split is computed
+     * over — which may be wider than the displayed {@code start}/{@code end}. The activity report shows a
+     * cumulative snapshot (only the uploaded months) but leave belongs to the whole activity, so it passes
+     * the full activity window here; otherwise the quota would be prorated down to the uploaded months.
+     */
+    private AttendanceReportSummary buildSummary(
+            MasterResource resource, String projectId, LocalDate start, LocalDate end, String periodLabel,
+            String designation, LocalDate joiningDate, boolean active, LocalDate lastWorkingDate,
+            LocalDate leaveStart, LocalDate leaveEnd) {
         LocalDate effectiveStart = (joiningDate != null && joiningDate.isAfter(start)) ? joiningDate : start;
         LocalDate effectiveEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(end)) ? lastWorkingDate : end;
         int totalDays = (int) (effectiveEnd.toEpochDay() - effectiveStart.toEpochDay()) + 1;
@@ -662,7 +732,7 @@ public class AttendanceQueryService {
         double presentDays = presentDaysRaw + halfDays * 0.5;
 
         double effectiveAbsent = absentDays + halfDays * 0.5;
-        QuarterLeaveCalculation calc = leaveForWindow(resource, projectId, start, end);
+        QuarterLeaveCalculation calc = leaveForWindow(resource, projectId, leaveStart, leaveEnd);
         double paidLeaveDays   = calc.paidLeaveDays();
         double unpaidLeaveDays = calc.unpaidLeaveDays();
         int sandwichDays       = calc.sandwichDays();

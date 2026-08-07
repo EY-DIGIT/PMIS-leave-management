@@ -89,6 +89,9 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
             @Param("start") LocalDate start,
             @Param("end") LocalDate end);
 
+    @Query("SELECT DISTINCT a.activityId FROM Attendance a WHERE a.resource.id = :resourceId AND a.activityId IS NOT NULL")
+    List<String> findDistinctActivityIdsByResourceId(@Param("resourceId") Long resourceId);
+
     @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.projectId = :projectId AND a.milestoneId = :milestoneId AND a.attendanceDate BETWEEN :start AND :end")
     Optional<LocalDate> findMinDateByProjectIdAndMilestoneIdAndDateBetween(
             @Param("projectId") String projectId,

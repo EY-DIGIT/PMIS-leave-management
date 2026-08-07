@@ -2,6 +2,7 @@ package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
+import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.AttendanceReportResult;
 import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
@@ -192,6 +193,25 @@ public class AttendanceController {
             @Parameter(description = "Project id") @RequestParam String projectId,
             @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
         return attendanceQueryService.activityReplacements(projectId, activityId);
+    }
+
+    /**
+     * Resource history for a project + designation (who worked which activities, when, and status).
+     * GET /api/attendance/report/activity/resource-details?projectId=&designation=&organisationId=
+     */
+    @Operation(
+            summary = "Resource-history by project + designation",
+            description = "Lists every resource holding the given designation on the project, each with the "
+                    + "activities they worked and the period worked on each (assignment window within the "
+                    + "activity) plus status (Active/Completed). Used to decide whether an uploaded resource "
+                    + "is a continuation, a new deployment, or a replacement. organisationId is an optional filter.")
+    @GetMapping("/report/activity/resource-details")
+    public ActivityResourceDetailsReport resourceDetailsByDesignation(
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Designation (role as per contract)") @RequestParam String designation,
+            @Parameter(description = "Organisation id filter (optional)")
+                    @RequestParam(value = "organisationId", required = false) String organisationId) {
+        return attendanceQueryService.resourceDetailsByDesignation(projectId, designation, organisationId);
     }
 
     /**

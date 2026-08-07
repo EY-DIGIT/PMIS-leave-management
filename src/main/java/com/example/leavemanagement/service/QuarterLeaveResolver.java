@@ -91,14 +91,28 @@ public class QuarterLeaveResolver {
                 (resId != null && projectId != null)
                         ? findPredecessorChain(resId, projectId, windowStart, windowEnd)
                         : List.of();
-        double effectiveQuota = predecessorChain.isEmpty()
-                ? permissibleQuota
-                : computeRemainingFromChain(predecessorChain, windowStart, windowEnd, holidays, permissibleQuota);
+
+        if (predecessorChain.isEmpty()) {
+            // First/only resource of the designation: prorate the pool by this resource's own join date.
+            return policy.compute(
+                    windowStart, windowEnd, joiningDate,
+                    absentDates, halfDayDates,
+                    holidays, permissibleQuota, 0);
+        }
+
+        // Replacement: the permissible pool belongs to the Activity + Designation. Prorate it ONCE by the
+        // designation's first-active date (chain head), consume the predecessors' paid leave, and hand the
+        // remainder to this resource with no re-proration — a replacement never gets a fresh entitlement.
+        LocalDate headStart = predecessorChain.get(0).getAssignmentStartDate();
+        double sharedPermissible = policy.compute(
+                windowStart, windowEnd, headStart,
+                Set.of(), Set.of(), holidays, permissibleQuota, 0).permissibleLeave();
+        double remaining = computeRemainingFromChain(predecessorChain, windowStart, windowEnd, holidays, sharedPermissible);
 
         return policy.compute(
-                windowStart, windowEnd, joiningDate,
+                windowStart, windowEnd, null,
                 absentDates, halfDayDates,
-                holidays, effectiveQuota, 0);
+                holidays, remaining, 0);
     }
 
     /**
@@ -166,7 +180,7 @@ public class QuarterLeaveResolver {
                     .filter(a -> a.getStatus() == AttendanceStatus.HD)
                     .map(Attendance::getAttendanceDate).collect(Collectors.toSet());
             QuarterLeaveCalculation predCalc = policy.compute(
-                    windowStart, windowEnd, pr.getAssignmentStartDate(),
+                    windowStart, windowEnd, null,
                     predAbsent, predHalfDays, holidays, remaining, 0);
             remaining = Math.max(0.0, remaining - predCalc.paidLeaveDays());
         }
