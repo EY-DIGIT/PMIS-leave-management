@@ -23,6 +23,7 @@ public record ResourceCostSummary(
         String projectId,
         String period,
         int calendarDays,
+        int activeCalendarDays,
         double plannedPeriodCost,
         double perDayCost,
         double unpaidLeaveDays,

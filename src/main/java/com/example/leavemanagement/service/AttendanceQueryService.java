@@ -818,6 +818,7 @@ public class AttendanceQueryService {
                 .toList();
 
         int totalCalendarDays = monthly.stream().mapToInt(MonthlyResourceCost::calendarDays).sum();
+        int totalActiveCalendarDays = monthly.stream().mapToInt(MonthlyResourceCost::activeCalendarDays).sum();
         double totalPlannedCost = monthly.stream().mapToDouble(m -> m.cost() + m.deductedAmount()).sum();
         double totalUnpaidDays = monthly.stream().mapToDouble(MonthlyResourceCost::totalUnpaidDays).sum();
         double totalDeductedAmount = monthly.stream().mapToDouble(MonthlyResourceCost::deductedAmount).sum();
@@ -825,7 +826,7 @@ public class AttendanceQueryService {
         double totalRelaxationCost = monthly.stream().mapToDouble(MonthlyResourceCost::relaxationCost).sum();
         double totalBillableDays = monthly.stream().mapToDouble(MonthlyResourceCost::billableDays).sum();
 
-        double perDayCost = totalCalendarDays > 0 ? round2(totalPlannedCost / totalCalendarDays) : 0d;
+        double perDayCost = totalActiveCalendarDays > 0 ? round2(totalPlannedCost / totalActiveCalendarDays) : 0d;
         double deductedAmount = round2(totalDeductedAmount);
         // Relaxation is already inside the reduced deduction (Rule #5) — no add-back.
         double periodCost = round2(totalPlannedCost - totalDeductedAmount);
@@ -833,7 +834,7 @@ public class AttendanceQueryService {
 
         return new ResourceCostSummary(
                 resource.getResId(), resource.getName(), projectId, periodLabel,
-                totalCalendarDays, round2(totalPlannedCost), perDayCost,
+                totalCalendarDays, totalActiveCalendarDays, round2(totalPlannedCost), perDayCost,
                 totalUnpaidDays, round2(totalBillableDays), round2(totalBillableDays),
                 deductedAmount, periodCost,
                 totalRelaxationDays, round2(totalRelaxationCost), totalCost,
@@ -915,7 +916,7 @@ public class AttendanceQueryService {
         int fullCalendarDays = (int) (toDate.toEpochDay() - fromDate.toEpochDay()) + 1;
         LocalDate effectiveFrom = (joiningDate != null && joiningDate.isAfter(fromDate)) ? joiningDate : fromDate;
         LocalDate effectiveTo = (lastWorkingDate != null && lastWorkingDate.isBefore(toDate)) ? lastWorkingDate : toDate;
-        int calendarDays = Math.max(0, (int) (effectiveTo.toEpochDay() - effectiveFrom.toEpochDay()) + 1);
+        int activeCalendarDays = Math.max(0, (int) (effectiveTo.toEpochDay() - effectiveFrom.toEpochDay()) + 1);
 
         double unpaidLeaveDays =
                 unpaidFull.stream().filter(d -> inRange(d, fromDate, toDate)).count()
@@ -932,8 +933,9 @@ public class AttendanceQueryService {
         double perDayRate = monthlyRate != null ? round2(monthlyRate / fullCalendarDays) : 0d;
         double deductedAmount = monthlyRate != null ? round2(totalUnpaidDays * monthlyRate / fullCalendarDays) : 0d;
         double relaxationCost = monthlyRate != null ? round2(relaxationDays * monthlyRate / fullCalendarDays) : 0d;
-        double cost = monthlyRate != null ? round2((double) calendarDays * monthlyRate / fullCalendarDays - deductedAmount) : 0d;
-        double billableDays = round2(calendarDays - totalUnpaidDays);
+        // Cost bills only the days the resource was active; billable days net out unpaid within that.
+        double cost = monthlyRate != null ? round2((double) activeCalendarDays * monthlyRate / fullCalendarDays - deductedAmount) : 0d;
+        double billableDays = round2(Math.max(0.0, activeCalendarDays - totalUnpaidDays));
 
         return new MonthlyResourceCost(
                 resource.getResId(),
@@ -950,7 +952,8 @@ public class AttendanceQueryService {
                 attendance.halfDays(),
                 attendance.absentDays(),
                 paidLeaveDaysMonthly,
-                calendarDays,
+                fullCalendarDays,
+                activeCalendarDays,
                 unpaidLeaveDays,
                 sandwichLeave,
                 relaxationDays,
@@ -1148,6 +1151,7 @@ public class AttendanceQueryService {
         String rateYear = resolveRateYear(projectId, orgId, periodStart,
                 assignment != null ? assignment.getRateYear() : null);
 
+        int fullCalendarDays = (int) (periodEnd.toEpochDay() - periodStart.toEpochDay()) + 1;
         LocalDate effectiveFrom = (joiningDate != null && joiningDate.isAfter(periodStart)) ? joiningDate : periodStart;
         LocalDate effectiveTo = (lastWorkingDate != null && lastWorkingDate.isBefore(periodEnd)) ? lastWorkingDate : periodEnd;
         int calendarDays = Math.max(0, (int) (effectiveTo.toEpochDay() - effectiveFrom.toEpochDay()) + 1);
@@ -1264,14 +1268,14 @@ public class AttendanceQueryService {
                 rateYear, periodLabel, effectiveFrom, effectiveTo,
                 workingDays, presentDays, halfDays, absentDays,
                 leaveCalc.paidLeaveDays(),
-                calendarDays, unpaidLeaveDays, sandwichLeave, relaxationDays, totalUnpaidDays,
+                fullCalendarDays, calendarDays, unpaidLeaveDays, sandwichLeave, relaxationDays, totalUnpaidDays,
                 billableDays, billableDays,
                 monthlyRate != null ? monthlyRate : 0d,
                 perDayCost, deductedAmount, round2(relaxationCostVal), periodCost);
 
         return new ResourceCostSummary(
                 resource.getResId(), resource.getName(), projectId, periodLabel,
-                calendarDays, round2(totalPlannedCost), perDayCost,
+                fullCalendarDays, calendarDays, round2(totalPlannedCost), perDayCost,
                 totalUnpaidDays, billableDays, billableDays,
                 deductedAmount, periodCost,
                 relaxationDays, round2(relaxationCostVal), totalCost,
