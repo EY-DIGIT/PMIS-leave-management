@@ -697,7 +697,8 @@ public class AttendanceQueryService {
             LocalDate leaveStart, LocalDate leaveEnd) {
         LocalDate effectiveStart = (joiningDate != null && joiningDate.isAfter(start)) ? joiningDate : start;
         LocalDate effectiveEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(end)) ? lastWorkingDate : end;
-        int totalDays = (int) (effectiveEnd.toEpochDay() - effectiveStart.toEpochDay()) + 1;
+        // Resource not active in this window (joined after it, or left before it) → no active days.
+        int totalDays = Math.max(0, (int) (effectiveEnd.toEpochDay() - effectiveStart.toEpochDay()) + 1);
         Set<LocalDate> holidays = holidaysBetween(effectiveStart, effectiveEnd);
         int weekOffDays = 0;
         int holidayDays = 0;
@@ -888,6 +889,8 @@ public class AttendanceQueryService {
                 .map(c -> buildMonthlyCost(resource, projectId, c[0], c[1],
                         c[0].format(PERIOD_DATE_FMT) + " to " + c[1].format(PERIOD_DATE_FMT),
                         unpaidFull, unpaidHalf, sandwich, relaxationDatesSet))
+                // Only cycles the resource actually has attendance in (skip pre-joining / post-leaving months).
+                .filter(m -> m.presentDays() > 0 || m.absentDays() > 0 || m.halfDays() > 0)
                 .toList();
 
         int totalCalendarDays = monthly.stream().mapToInt(MonthlyResourceCost::calendarDays).sum();
