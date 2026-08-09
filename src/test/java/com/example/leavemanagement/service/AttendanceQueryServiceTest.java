@@ -476,7 +476,6 @@ class AttendanceQueryServiceTest {
 
         ProjectResource kuldeepAssign =
                 new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 2, 5));
-        kuldeepAssign.setReplacedByResId("E2");
         kuldeepAssign.setActive(false);
         kuldeepAssign.setAssignmentEndDate(LocalDate.of(2026, 2, 10));
         ProjectResource rahulAssign =
@@ -488,10 +487,8 @@ class AttendanceQueryServiceTest {
                 .thenReturn(List.of(kuldeepAssign));
         when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E2", "P1"))
                 .thenReturn(Optional.of(rahulAssign));
-        when(projectResourceRepository.findByReplacedByResIdAndProjectId("E2", "P1"))
-                .thenReturn(Optional.of(kuldeepAssign));
-        when(projectResourceRepository.findByReplacedByResIdAndProjectId("E1", "P1"))
-                .thenReturn(Optional.empty());
+        when(projectResourceRepository.findByProjectIdAndRole("P1", "Program Manager"))
+                .thenReturn(List.of(kuldeepAssign, rahulAssign));
 
         when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
                 new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6),
@@ -523,6 +520,83 @@ class AttendanceQueryServiceTest {
         assertThat(kuldeepRow.unpaidLeaveDays()).isEqualTo(0.0);
         assertThat(rahulRow.paidLeaveDays()).isEqualTo(1.0);
         assertThat(rahulRow.unpaidLeaveDays()).isEqualTo(1.0);
+    }
+
+    @Test
+    void replacementDetectedByLifecycleDatesEvenWithMultipleConfiguredSlots() {
+        // Program Manager qty 2. Kuldeep 07-Jan..09-Feb (5 paid), Ravindra 07-Jan..active (independent),
+        // Rahul joins 10-Feb..active. Rahul chains to Kuldeep by lifecycle dates (no replacedByResId),
+        // inheriting the remaining 1; Ravindra keeps his own full quota.
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource rahul = new MasterResource("E2");
+        rahul.setName("Rahul");
+        setId(rahul, 2L);
+        MasterResource ravindra = new MasterResource("E3");
+        ravindra.setName("Ravindra");
+        setId(ravindra, 3L);
+
+        ProjectResource kuldeepAssign =
+                new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 7));
+        kuldeepAssign.setActive(false);
+        kuldeepAssign.setAssignmentEndDate(LocalDate.of(2026, 2, 9));
+        ProjectResource ravindraAssign =
+                new ProjectResource(ravindra, "P1", "Program Manager", LocalDate.of(2026, 1, 7));
+        ProjectResource rahulAssign =
+                new ProjectResource(rahul, "P1", "Program Manager", LocalDate.of(2026, 2, 10));
+
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.empty());
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E1", "P1"))
+                .thenReturn(List.of(kuldeepAssign));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E2", "P1"))
+                .thenReturn(Optional.of(rahulAssign));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E3", "P1"))
+                .thenReturn(Optional.of(ravindraAssign));
+        when(projectResourceRepository.findByProjectIdAndRole("P1", "Program Manager"))
+                .thenReturn(List.of(kuldeepAssign, ravindraAssign, rahulAssign));
+
+        when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6),
+                        List.of(new ActivityResourceConfig("Program Manager", 2, 3.0, 198764.0)))));
+        when(attendanceRepository.findMinDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(List.of(kuldeep, ravindra, rahul));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.empty());
+
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any())).thenReturn(List.of(
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 7), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 8), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 9), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 12), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 13), AttendanceStatus.A)));
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(3L), any(), any())).thenReturn(List.of(
+                new Attendance(ravindra, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 14), AttendanceStatus.A),
+                new Attendance(ravindra, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 15), AttendanceStatus.A),
+                new Attendance(ravindra, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 16), AttendanceStatus.A)));
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(2L), any(), any())).thenReturn(List.of(
+                new Attendance(rahul, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 12), AttendanceStatus.A),
+                new Attendance(rahul, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 13), AttendanceStatus.A)));
+
+        ActivityAttendanceReportResult report = service.activityReport("P1", "M1", "ACT-001");
+        AttendanceReportSummary kuldeepRow = report.resources().stream()
+                .filter(r -> r.attendanceId().equals("E1")).findFirst().orElseThrow();
+        AttendanceReportSummary rahulRow = report.resources().stream()
+                .filter(r -> r.attendanceId().equals("E2")).findFirst().orElseThrow();
+        AttendanceReportSummary ravindraRow = report.resources().stream()
+                .filter(r -> r.attendanceId().equals("E3")).findFirst().orElseThrow();
+
+        assertThat(kuldeepRow.paidLeaveDays()).isEqualTo(5.0);
+        assertThat(kuldeepRow.unpaidLeaveDays()).isEqualTo(0.0);
+        assertThat(rahulRow.paidLeaveDays()).isEqualTo(1.0);   // inherited remaining from Kuldeep
+        assertThat(rahulRow.unpaidLeaveDays()).isEqualTo(1.0);
+        assertThat(ravindraRow.paidLeaveDays()).isEqualTo(3.0); // independent full quota
+        assertThat(ravindraRow.unpaidLeaveDays()).isEqualTo(0.0);
     }
 
     @Test

@@ -140,26 +140,56 @@ public class QuarterLeaveResolver {
         };
     }
 
+    /**
+     * The chain of predecessor resources of the same designation that a replacement inherits its leave
+     * balance from — inferred from the <b>resource lifecycle</b>, not an explicit link. A predecessor is
+     * a resource on the same project with the same designation (role) whose assignment overlaps the leave
+     * window and whose Last Working Date (assignmentEndDate) falls strictly before the current resource's
+     * Joining Date (assignmentStartDate); the closest such departure (max end date, any gap) is chained.
+     * Returned oldest-first.
+     */
     private List<ProjectResource> findPredecessorChain(
             String resId, String projectId, LocalDate windowStart, LocalDate windowEnd) {
+        ProjectResource current = projectResourceRepository
+                .findByResource_ResIdAndProjectIdAndActiveTrue(resId, projectId)
+                .or(() -> projectResourceRepository
+                        .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(resId, projectId)
+                        .stream().findFirst())
+                .orElse(null);
+        if (current == null || current.getRole() == null || current.getAssignmentStartDate() == null) {
+            return List.of();
+        }
+
+        List<ProjectResource> candidates = projectResourceRepository
+                .findByProjectIdAndRole(projectId, current.getRole()).stream()
+                .filter(pr -> pr.getAssignmentStartDate() != null
+                        && !pr.getAssignmentStartDate().isAfter(windowEnd)
+                        && (pr.getAssignmentEndDate() == null || !pr.getAssignmentEndDate().isBefore(windowStart)))
+                .toList();
+
         List<ProjectResource> chain = new ArrayList<>();
-        String lookup = resId;
         Set<String> visited = new HashSet<>();
-        visited.add(lookup);
+        visited.add(resId);
+        ProjectResource cursor = current;
         while (true) {
-            Optional<ProjectResource> pred =
-                    projectResourceRepository.findByReplacedByResIdAndProjectId(lookup, projectId);
-            if (pred.isEmpty()) break;
-            ProjectResource pr = pred.get();
-            LocalDate start = pr.getAssignmentStartDate();
-            LocalDate end = pr.getAssignmentEndDate();
-            boolean overlapsWindow = !start.isAfter(windowEnd)
-                    && (end == null || !end.isBefore(windowStart));
-            if (!overlapsWindow) break;
-            String predResId = pr.getResource().getResId();
-            if (!visited.add(predResId)) break;
-            chain.add(pr);
-            lookup = predResId;
+            LocalDate joinDate = cursor.getAssignmentStartDate();
+            ProjectResource predecessor = null;
+            for (ProjectResource cand : candidates) {
+                LocalDate end = cand.getAssignmentEndDate();
+                if (end == null || joinDate == null || !end.isBefore(joinDate)) {
+                    continue; // still active, or did not leave before this resource joined
+                }
+                if (visited.contains(cand.getResource().getResId())) {
+                    continue;
+                }
+                if (predecessor == null || end.isAfter(predecessor.getAssignmentEndDate())) {
+                    predecessor = cand; // closest earlier departure
+                }
+            }
+            if (predecessor == null) break;
+            visited.add(predecessor.getResource().getResId());
+            chain.add(predecessor);
+            cursor = predecessor;
         }
         Collections.reverse(chain);
         return chain;
