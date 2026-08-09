@@ -109,8 +109,12 @@ public class QuarterLeaveResolver {
                 Set.of(), Set.of(), holidays, permissibleQuota, 0).permissibleLeave();
         double remaining = computeRemainingFromChain(predecessorChain, windowStart, windowEnd, holidays, sharedPermissible);
 
+        // The replacement's OWN leave is counted only from its joining date onward — never inherit the
+        // predecessor's leave dates/window. Clip the calc window to the join date so any attendance before
+        // the resource joined is excluded (paid/unpaid/sandwich).
+        LocalDate effectiveStart = (joiningDate != null && joiningDate.isAfter(windowStart)) ? joiningDate : windowStart;
         return policy.compute(
-                windowStart, windowEnd, null,
+                effectiveStart, windowEnd, null,
                 absentDates, halfDayDates,
                 holidays, remaining, 0);
     }

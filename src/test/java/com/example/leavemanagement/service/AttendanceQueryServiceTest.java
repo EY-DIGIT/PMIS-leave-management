@@ -523,6 +523,59 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
+    void replacementLeaveIsCountedOnlyFromJoiningDateNotActivityStart() {
+        // Kuldeep 07-Jan..09-Feb (0 leaves), Rahul replaces from 10-Feb. Rahul has a stray pre-join
+        // absence (08-Jan) plus two post-join (12,13-Feb). Only the post-join leaves must be counted.
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource rahul = new MasterResource("E2");
+        rahul.setName("Rahul");
+        setId(rahul, 2L);
+
+        ProjectResource kuldeepAssign =
+                new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 7));
+        kuldeepAssign.setActive(false);
+        kuldeepAssign.setAssignmentEndDate(LocalDate.of(2026, 2, 9));
+        ProjectResource rahulAssign =
+                new ProjectResource(rahul, "P1", "Program Manager", LocalDate.of(2026, 2, 10));
+
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.empty());
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E1", "P1"))
+                .thenReturn(List.of(kuldeepAssign));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E2", "P1"))
+                .thenReturn(Optional.of(rahulAssign));
+        when(projectResourceRepository.findByProjectIdAndRole("P1", "Program Manager"))
+                .thenReturn(List.of(kuldeepAssign, rahulAssign));
+        when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6),
+                        List.of(new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0)))));
+        when(attendanceRepository.findMinDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(List.of(kuldeep, rahul));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.empty());
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any())).thenReturn(List.of());
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(2L), any(), any())).thenReturn(List.of(
+                new Attendance(rahul, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 8), AttendanceStatus.A),
+                new Attendance(rahul, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 12), AttendanceStatus.A),
+                new Attendance(rahul, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 2, 13), AttendanceStatus.A)));
+
+        ActivityAttendanceReportResult report = service.activityReport("P1", "M1", "ACT-001");
+        AttendanceReportSummary rahulRow = report.resources().stream()
+                .filter(r -> r.attendanceId().equals("E2")).findFirst().orElseThrow();
+
+        // Only the two post-joining absences count; the 08-Jan pre-join date is excluded.
+        assertThat(rahulRow.leaveTaken()).isEqualTo(2.0);
+        assertThat(rahulRow.paidLeaveDays()).isEqualTo(2.0);
+        assertThat(rahulRow.unpaidLeaveDays()).isEqualTo(0.0);
+    }
+
+    @Test
     void replacementDetectedByLifecycleDatesEvenWithMultipleConfiguredSlots() {
         // Program Manager qty 2. Kuldeep 07-Jan..09-Feb (5 paid), Ravindra 07-Jan..active (independent),
         // Rahul joins 10-Feb..active. Rahul chains to Kuldeep by lifecycle dates (no replacedByResId),
