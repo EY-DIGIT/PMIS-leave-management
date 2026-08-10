@@ -546,8 +546,8 @@ public class AttendanceQueryService {
     }
 
     /**
-     * Every non-working day within an activity's window — public holidays plus weekend days (Sat/Sun) —
-     * in one chronological list. A public holiday that falls on a weekend is reported as a HOLIDAY.
+     * Public holidays within an activity's window. Plain weekends are excluded; a holiday on a weekend
+     * is tagged {@code WEEKEND_HOLIDAY}, a holiday on a weekday {@code HOLIDAY}.
      */
     @Transactional(readOnly = true)
     public ActivityHolidayReport activityHolidays(String projectId, String activityId) {
@@ -560,34 +560,25 @@ public class AttendanceQueryService {
         LocalDate aEnd = activity.endDate();
         String activityName = activity.activityName() != null ? activity.activityName() : activityId;
 
-        Map<LocalDate, String> holidayNames = new HashMap<>();
-        holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(aStart, aEnd)
-                .forEach(h -> holidayNames.put(h.getHolidayDate(), h.getName()));
-
-        List<ActivityHolidayReport.NonWorkingDay> days = new ArrayList<>();
-        int holidayCount = 0;
+        List<ActivityHolidayReport.Holiday> holidays = new ArrayList<>();
+        int weekdayCount = 0;
         int weekendCount = 0;
-        for (LocalDate d = aStart; !d.isAfter(aEnd); d = d.plusDays(1)) {
+        for (PublicHoliday h : holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(aStart, aEnd)) {
+            LocalDate d = h.getHolidayDate();
             boolean weekend = isWeekend(d);
-            boolean holiday = holidayNames.containsKey(d);
-            if (!weekend && !holiday) {
-                continue;
-            }
-            if (holiday) {
-                holidayCount++;
-            }
             if (weekend) {
                 weekendCount++;
+            } else {
+                weekdayCount++;
             }
             String dayName = d.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH);
-            String type = holiday ? "HOLIDAY" : "WEEKEND";
-            String name = holiday ? holidayNames.get(d) : dayName;
-            days.add(new ActivityHolidayReport.NonWorkingDay(d, dayName, type, name));
+            String type = weekend ? "WEEKEND_HOLIDAY" : "HOLIDAY";
+            holidays.add(new ActivityHolidayReport.Holiday(d, dayName, type, h.getName()));
         }
 
         return new ActivityHolidayReport(
                 activityId, activityName, aStart, aEnd,
-                days.size(), holidayCount, weekendCount, days);
+                holidays.size(), weekdayCount, weekendCount, holidays);
     }
 
     /**

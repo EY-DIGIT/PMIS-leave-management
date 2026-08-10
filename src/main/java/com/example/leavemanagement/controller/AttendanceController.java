@@ -220,10 +220,10 @@ public class AttendanceController {
      * GET /api/attendance/report/activity/holidays?projectId=&activityId=
      */
     @Operation(
-            summary = "Non-working days in an activity window",
-            description = "Returns every public holiday and weekend day (Sat/Sun) between the activity's "
-                    + "start and end date, in one chronological list, with holiday/weekend counts. A public "
-                    + "holiday that falls on a weekend is reported as a HOLIDAY.")
+            summary = "Public holidays in an activity window",
+            description = "Returns the public holidays between the activity's start and end date. Plain "
+                    + "weekends (Sat/Sun) are excluded; a holiday that falls on a weekend is tagged "
+                    + "WEEKEND_HOLIDAY, a holiday on a weekday HOLIDAY, with weekday/weekend holiday counts.")
     @GetMapping("/report/activity/holidays")
     public ActivityHolidayReport activityHolidays(
             @Parameter(description = "Project id") @RequestParam String projectId,
