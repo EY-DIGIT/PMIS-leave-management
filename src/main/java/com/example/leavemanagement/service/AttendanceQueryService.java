@@ -3,6 +3,7 @@ package com.example.leavemanagement.service;
 import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityHolidayReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
@@ -155,8 +156,8 @@ public class AttendanceQueryService {
         int[] thresholds = resolveThresholds(projectId, leavePolicies.get(projectId));
         Set<LocalDate> holidays = holidaysBetween(startDate, endDate);
 
-        attendanceRepository.bulkDeleteByProjectIdAndDateBetween(projectId, startDate, endDate);
-
+        // Incremental upsert: for each uploaded (resource, date) update the existing row or insert a new
+        // one. Rows for other resources, other dates, or other months are never touched — no bulk delete.
         int stored = 0;
         for (EmployeeAttendanceByDate employee : parsed) {
             MasterResource resource = masterResourceRepository.findByResId(employee.attendanceId()).orElseThrow();
@@ -165,14 +166,27 @@ public class AttendanceQueryService {
                     continue;
                 }
                 Integer workedMinutes = employee.workedMinutesByDate().get(date);
-                Attendance row;
+                AttendanceStatus status;
+                Double workingHours;
                 if (workedMinutes != null && workedMinutes > 0) {
-                    AttendanceStatus status = workedMinutes >= thresholds[0] ? AttendanceStatus.P : AttendanceStatus.HD;
-                    row = new Attendance(resource, projectId, organisationId, milestoneId, activityId, date, status);
-                    row.setWorkingHours(Math.round(workedMinutes / 60.0 * 100) / 100.0);
+                    status = workedMinutes >= thresholds[0] ? AttendanceStatus.P : AttendanceStatus.HD;
+                    workingHours = Math.round(workedMinutes / 60.0 * 100) / 100.0;
                 } else {
-                    row = new Attendance(resource, projectId, organisationId, milestoneId, activityId, date, AttendanceStatus.A);
+                    status = AttendanceStatus.A;
+                    workingHours = null;
                 }
+                final AttendanceStatus rowStatus = status;
+                final LocalDate rowDate = date;
+                Attendance row = attendanceRepository
+                        .findByResourceIdAndAttendanceDate(resource.getId(), rowDate)
+                        .orElseGet(() -> new Attendance(
+                                resource, projectId, organisationId, milestoneId, activityId, rowDate, rowStatus));
+                row.setProjectId(projectId);
+                row.setOrganisationId(organisationId);
+                row.setMilestoneId(milestoneId);
+                row.setActivityId(activityId);
+                row.setStatus(status);
+                row.setWorkingHours(workingHours);
                 attendanceRepository.save(row);
             }
             stored++;
@@ -529,6 +543,51 @@ public class AttendanceQueryService {
                 activityId, activityName, projectId,
                 activity.startDate(), activity.endDate(),
                 totalReplacements, designations);
+    }
+
+    /**
+     * Every non-working day within an activity's window — public holidays plus weekend days (Sat/Sun) —
+     * in one chronological list. A public holiday that falls on a weekend is reported as a HOLIDAY.
+     */
+    @Transactional(readOnly = true)
+    public ActivityHolidayReport activityHolidays(String projectId, String activityId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
+        }
+        LocalDate aStart = activity.startDate();
+        LocalDate aEnd = activity.endDate();
+        String activityName = activity.activityName() != null ? activity.activityName() : activityId;
+
+        Map<LocalDate, String> holidayNames = new HashMap<>();
+        holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(aStart, aEnd)
+                .forEach(h -> holidayNames.put(h.getHolidayDate(), h.getName()));
+
+        List<ActivityHolidayReport.NonWorkingDay> days = new ArrayList<>();
+        int holidayCount = 0;
+        int weekendCount = 0;
+        for (LocalDate d = aStart; !d.isAfter(aEnd); d = d.plusDays(1)) {
+            boolean weekend = isWeekend(d);
+            boolean holiday = holidayNames.containsKey(d);
+            if (!weekend && !holiday) {
+                continue;
+            }
+            if (holiday) {
+                holidayCount++;
+            }
+            if (weekend) {
+                weekendCount++;
+            }
+            String dayName = d.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH);
+            String type = holiday ? "HOLIDAY" : "WEEKEND";
+            String name = holiday ? holidayNames.get(d) : dayName;
+            days.add(new ActivityHolidayReport.NonWorkingDay(d, dayName, type, name));
+        }
+
+        return new ActivityHolidayReport(
+                activityId, activityName, aStart, aEnd,
+                days.size(), holidayCount, weekendCount, days);
     }
 
     /**

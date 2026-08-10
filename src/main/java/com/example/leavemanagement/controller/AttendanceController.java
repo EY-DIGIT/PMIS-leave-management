@@ -1,6 +1,7 @@
 package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityHolidayReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.AttendanceReportResult;
@@ -212,6 +213,22 @@ public class AttendanceController {
             @Parameter(description = "Organisation id filter (optional)")
                     @RequestParam(value = "organisationId", required = false) String organisationId) {
         return attendanceQueryService.resourceDetailsByDesignation(projectId, designation, organisationId);
+    }
+
+    /**
+     * All non-working days (public holidays + weekends) within an activity's window.
+     * GET /api/attendance/report/activity/holidays?projectId=&activityId=
+     */
+    @Operation(
+            summary = "Non-working days in an activity window",
+            description = "Returns every public holiday and weekend day (Sat/Sun) between the activity's "
+                    + "start and end date, in one chronological list, with holiday/weekend counts. A public "
+                    + "holiday that falls on a weekend is reported as a HOLIDAY.")
+    @GetMapping("/report/activity/holidays")
+    public ActivityHolidayReport activityHolidays(
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
+        return attendanceQueryService.activityHolidays(projectId, activityId);
     }
 
     /**

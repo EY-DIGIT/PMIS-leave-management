@@ -251,6 +251,28 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
+    void uploadUpsertsExistingRowIncrementallyWithoutBulkDelete() {
+        // A re-upload updates the existing (resource, date) row in place — no delete, other rows untouched.
+        LocalDate day = LocalDate.of(2026, 7, 1);
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate("E1", "Asha", "Dev", Set.of(), Map.of(day, 480))));
+        stubActiveResource("E1", "P1", 1L);
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.of(
+                new LeavePolicyResponse(4, 8, "HALF_DAY", "FULL_DAY", true, true, 2, "MONTHLY", true, false, true, true)));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        MasterResource resource = masterResourceRepository.findByResId("E1").orElseThrow();
+        Attendance existing = new Attendance(resource, "P1", null, "M1", null, day, AttendanceStatus.A);
+        when(attendanceRepository.findByResourceIdAndAttendanceDate(1L, day)).thenReturn(Optional.of(existing));
+
+        service.upload("P1", null, "M1", null, day, day, null, anyFile());
+
+        // Existing row updated in place (A → P), and no bulk delete was issued.
+        assertThat(existing.getStatus()).isEqualTo(AttendanceStatus.P);
+        verify(attendanceRepository).save(existing);
+        verify(attendanceRepository, never()).bulkDeleteByProjectIdAndDateBetween(any(), any(), any());
+    }
+
+    @Test
     void uploadRejectsWhenPeriodExceedsDesignationPlannedDuration() {
         // Activity 11-Jan-2026..10-Apr-2026; designation duration 2 months → planned end 10-Mar-2026.
         // Uploading a period ending 10-Apr-2026 for that designation must be rejected.

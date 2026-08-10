@@ -27,7 +27,8 @@ import lombok.Setter;
  * persisted as a row per resource per day (that would be pure duplication of calendar data).
  *
  * <p>{@code (resource_id, attendance_date)} is unique, so the same resource can't have two
- * attendance facts on the same day; re-uploading a period replaces its rows instead of upserting.
+ * attendance facts on the same day. Re-uploading is incremental: each uploaded (resource, date) row is
+ * upserted (updated if it exists, else inserted); rows for other resources/dates/months are untouched.
  */
 @Entity
 @Table(
