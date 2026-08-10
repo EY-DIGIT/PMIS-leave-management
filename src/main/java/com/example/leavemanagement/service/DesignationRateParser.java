@@ -51,6 +51,7 @@ public class DesignationRateParser {
             Sheet sheet = wb.getSheetAt(0);
             if (sheet == null) throw new BadRequestException("The workbook has no sheets");
             FormulaEvaluator evaluator = wb.getCreationHelper().createFormulaEvaluator();
+            validateHeaderFormat(sheet, evaluator);
 
             for (Row row : sheet) {
                 if (row.getRowNum() < HEADER_ROWS) continue;
@@ -74,6 +75,27 @@ public class DesignationRateParser {
 
         if (rows.isEmpty()) throw new BadRequestException("The designation rate card file contains no data rows");
         return rows;
+    }
+
+    /**
+     * Rejects a wrong file (e.g. the resource master) before parsing, by checking the header row's
+     * discriminating columns: A = "Role as per Contract", B = a "Year-1" rate column.
+     */
+    private void validateHeaderFormat(Sheet sheet, FormulaEvaluator evaluator) {
+        Row header = sheet.getRow(0);
+        String colA = header == null ? "" : normalize(text(header.getCell(COL_ROLE), evaluator));
+        String colB = header == null ? "" : normalize(text(header.getCell(COL_YEAR_1), evaluator));
+        if (!colA.equals("roleaspercontract") || !colB.startsWith("year1")) {
+            throw new BadRequestException(
+                    "Invalid designation rate card file format. Expected the designation rate card template "
+                            + "with a header row: 'Role as per Contract | Year-1 Rate | Year-2 Rate | … | "
+                            + "Year-7 Rate'. Please upload the designation rate card file (not the resource "
+                            + "master or another file).");
+        }
+    }
+
+    private static String normalize(String s) {
+        return s == null ? "" : s.toLowerCase().replaceAll("[^a-z0-9]", "");
     }
 
     private boolean isBlank(Cell cell) {

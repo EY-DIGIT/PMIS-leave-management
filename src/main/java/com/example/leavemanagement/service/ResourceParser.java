@@ -65,6 +65,7 @@ public class ResourceParser {
                 throw new BadRequestException("The workbook has no sheets");
             }
             FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
+            validateHeaderFormat(sheet, evaluator);
 
             for (Row row : sheet) {
                 if (row.getRowNum() < HEADER_ROWS) {
@@ -97,6 +98,28 @@ public class ResourceParser {
             throw new BadRequestException("The Excel file contains no resource rows");
         }
         return rows;
+    }
+
+    /**
+     * Rejects a wrong file (e.g. the designation rate card or an attendance sheet) before parsing, by
+     * checking the header row's discriminating columns: A = "Attendance ID", C = "Role as per Contract".
+     */
+    private void validateHeaderFormat(Sheet sheet, FormulaEvaluator evaluator) {
+        Row header = sheet.getRow(0);
+        String colA = header == null ? "" : normalize(text(header.getCell(COL_RES_ID), evaluator));
+        String colC = header == null ? "" : normalize(text(header.getCell(COL_ROLE), evaluator));
+        if (!colA.equals("attendanceid") || !colC.equals("roleaspercontract")) {
+            throw new BadRequestException(
+                    "Invalid resource master file format. Expected the resource master template with a header "
+                            + "row: 'Attendance ID | Employee Name | Role as per Contract | Location | Date of "
+                            + "Joining | Last Day of Working | Category (RFP/CCN/ASG) | CCN/ASG Details'. "
+                            + "Please upload the resource master file (not the designation rate card, attendance, "
+                            + "or another file).");
+        }
+    }
+
+    private static String normalize(String s) {
+        return s == null ? "" : s.toLowerCase().replaceAll("[^a-z0-9]", "");
     }
 
     private String readName(Cell cell, FormulaEvaluator evaluator, int humanRow) {

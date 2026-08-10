@@ -94,7 +94,9 @@ class ResourceParserTest {
     void stripsTimeSuffixFromDateStrings() {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Resources");
-            sheet.createRow(0).createCell(0).setCellValue("Attendance ID"); // header
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Attendance ID");
+            header.createCell(2).setCellValue("Role as per Contract");
 
             Row r1 = sheet.createRow(1);
             r1.createCell(0).setCellValue("421");
@@ -115,7 +117,9 @@ class ResourceParserTest {
     void resolvesAutofilledFormulaCellsToTheirCalculatedResultNotFormulaText() {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Resources");
-            sheet.createRow(0).createCell(0).setCellValue("Attendance ID"); // 1 header row
+            Row header = sheet.createRow(0); // 1 header row
+            header.createCell(0).setCellValue("Attendance ID");
+            header.createCell(2).setCellValue("Role as per Contract");
 
             // Row 1: literal seed value.
             Row r1 = sheet.createRow(1);
@@ -143,7 +147,9 @@ class ResourceParserTest {
     void parsesReplacedByResIdColumn() {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Resources");
-            sheet.createRow(0).createCell(0).setCellValue("Attendance ID"); // header
+            Row header = sheet.createRow(0); // header
+            header.createCell(0).setCellValue("Attendance ID");
+            header.createCell(2).setCellValue("Role as per Contract");
 
             // R101 leaves and is replaced by R205
             Row r1 = sheet.createRow(1);
@@ -173,6 +179,26 @@ class ResourceParserTest {
             assertThat(rows.get(1).active()).isTrue();
         } catch (Exception ex) {
             throw new RuntimeException(ex);
+        }
+    }
+
+    @Test
+    void rejectsWrongFileFormat() throws Exception {
+        // A designation rate card file (col A = "Role as per Contract", col B = "Year-1 Rate")
+        // uploaded to the resource endpoint must be rejected before parsing.
+        try (XSSFWorkbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Designation Rates");
+            Row header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Role as per Contract");
+            header.createCell(1).setCellValue("Year-1 Rate");
+            Row r1 = sheet.createRow(1);
+            r1.createCell(0).setCellValue("Security Crypto Lead");
+            r1.createCell(1).setCellValue(175600);
+
+            MockMultipartFile file = toFile(wb);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> parser.parse(file))
+                    .isInstanceOf(com.example.leavemanagement.exception.BadRequestException.class)
+                    .hasMessageContaining("Invalid resource master file format");
         }
     }
 
