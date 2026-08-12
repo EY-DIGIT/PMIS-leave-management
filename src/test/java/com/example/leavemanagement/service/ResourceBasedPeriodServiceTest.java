@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 import com.example.leavemanagement.client.ProjectPhaseClient;
 import com.example.leavemanagement.dto.ProjectPhase;
 import com.example.leavemanagement.dto.ProjectPhasesResponse;
+import com.example.leavemanagement.dto.ProjectPhasesResponse.ProjectPhasesData;
 import com.example.leavemanagement.service.ResourceBasedPeriodService.ResourceBasedPeriod;
 import java.time.LocalDate;
 import java.util.List;
@@ -21,8 +22,14 @@ class ResourceBasedPeriodServiceTest {
     @Mock
     private ProjectPhaseClient phaseClient;
 
+    /** Builds a phase; the transaction-based flag is irrelevant to the resource-based merge. */
+    private static ProjectPhase phase(String name, LocalDate from, LocalDate to, boolean resourceBased) {
+        return new ProjectPhase(name, from, to, resourceBased, false);
+    }
+
     private ResourceBasedPeriod resolve(List<ProjectPhase> phases) {
-        when(phaseClient.getPhases("P1")).thenReturn(Optional.of(new ProjectPhasesResponse(phases)));
+        when(phaseClient.getPhases("P1"))
+                .thenReturn(Optional.of(new ProjectPhasesResponse(new ProjectPhasesData(phases))));
         return new ResourceBasedPeriodService(phaseClient).resolve("P1").orElse(null);
     }
 
@@ -30,9 +37,9 @@ class ResourceBasedPeriodServiceTest {
     void mergesOverlappingResourceBasedPhasesIntoOneSpan() {
         // Phase 1 is not resource-based and must be ignored; Phase 2 and Phase 3 overlap.
         ResourceBasedPeriod period = resolve(List.of(
-                new ProjectPhase("Planning", LocalDate.of(2026, 5, 10), LocalDate.of(2027, 5, 9), false),
-                new ProjectPhase("Build", LocalDate.of(2027, 5, 10), LocalDate.of(2028, 5, 10), true),
-                new ProjectPhase("Operate", LocalDate.of(2027, 5, 10), LocalDate.of(2032, 5, 10), true)));
+                phase("Planning", LocalDate.of(2026, 5, 10), LocalDate.of(2027, 5, 9), false),
+                phase("Build", LocalDate.of(2027, 5, 10), LocalDate.of(2028, 5, 10), true),
+                phase("Operate", LocalDate.of(2027, 5, 10), LocalDate.of(2032, 5, 10), true)));
 
         assertThat(period).isNotNull();
         assertThat(period.from()).isEqualTo(LocalDate.of(2027, 5, 10));
@@ -42,9 +49,9 @@ class ResourceBasedPeriodServiceTest {
     @Test
     void mergesContiguousResourceBasedPhasesIntoOneSpan() {
         ResourceBasedPeriod period = resolve(List.of(
-                new ProjectPhase("A", LocalDate.of(2027, 5, 10), LocalDate.of(2028, 5, 10), true),
-                new ProjectPhase("B", LocalDate.of(2028, 5, 10), LocalDate.of(2030, 5, 10), true),
-                new ProjectPhase("C", LocalDate.of(2030, 5, 10), LocalDate.of(2032, 5, 10), true)));
+                phase("A", LocalDate.of(2027, 5, 10), LocalDate.of(2028, 5, 10), true),
+                phase("B", LocalDate.of(2028, 5, 10), LocalDate.of(2030, 5, 10), true),
+                phase("C", LocalDate.of(2030, 5, 10), LocalDate.of(2032, 5, 10), true)));
 
         assertThat(period.from()).isEqualTo(LocalDate.of(2027, 5, 10));
         assertThat(period.to()).isEqualTo(LocalDate.of(2032, 5, 10));
@@ -52,8 +59,8 @@ class ResourceBasedPeriodServiceTest {
 
     @Test
     void emptyWhenNoResourceBasedPhases() {
-        when(phaseClient.getPhases("P1")).thenReturn(Optional.of(new ProjectPhasesResponse(List.of(
-                new ProjectPhase("Planning", LocalDate.of(2026, 5, 10), LocalDate.of(2027, 5, 9), false)))));
+        when(phaseClient.getPhases("P1")).thenReturn(Optional.of(new ProjectPhasesResponse(new ProjectPhasesData(
+                List.of(phase("Planning", LocalDate.of(2026, 5, 10), LocalDate.of(2027, 5, 9), false))))));
         assertThat(new ResourceBasedPeriodService(phaseClient).resolve("P1")).isEmpty();
     }
 
