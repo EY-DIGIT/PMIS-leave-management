@@ -477,10 +477,13 @@ public class AttendanceQueryService {
                 .findDistinctResourcesByActivityIdAndDateBetween(activityId, reportStart, reportEnd);
 
         // One row per designation assignment period (promotion → two rows: e.g. PM then PD), each scoped to
-        // its own period and computed with its own designation/leave/rate.
+        // its own period and computed with its own designation/leave/rate. The displayed attendance window
+        // is bounded by the latest uploaded attendance date (reportEnd) so the report grows month-by-month
+        // with each upload; the leave quota still uses the full activity window (aEnd) so proration is
+        // correct even when only one month is uploaded.
         List<AttendanceReportSummary> rows = uploadedResources.stream()
                 .flatMap(resource ->
-                        activityAssignmentRows(resource, projectId, activityId, aStart, aEnd, periodLabel).stream())
+                        activityAssignmentRows(resource, projectId, activityId, aStart, aEnd, reportEnd, periodLabel).stream())
                 .toList();
 
         int calendarDays = (int) (reportEnd.toEpochDay() - reportStart.toEpochDay()) + 1;
@@ -500,7 +503,7 @@ public class AttendanceQueryService {
      */
     private List<AttendanceReportSummary> activityAssignmentRows(
             MasterResource resource, String projectId, String activityId,
-            LocalDate aStart, LocalDate aEnd, String periodLabel) {
+            LocalDate aStart, LocalDate aEnd, LocalDate reportEnd, String periodLabel) {
         List<AttendanceReportSummary> rows = new ArrayList<>();
         for (ProjectResource a : projectResourceRepository
                 .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(resource.getResId(), projectId)) {
@@ -509,6 +512,7 @@ public class AttendanceQueryService {
                 continue;
             }
             LocalDate effStart = start.isAfter(aStart) ? start : aStart;
+            // Full activity-scoped assignment window — drives the leave quota/proration.
             LocalDate effEnd = (a.getAssignmentEndDate() != null && a.getAssignmentEndDate().isBefore(aEnd))
                     ? a.getAssignmentEndDate() : aEnd;
             if (effStart.isAfter(effEnd)) {
@@ -518,13 +522,20 @@ public class AttendanceQueryService {
                     resource.getResId(), activityId, effStart, effEnd)) {
                 continue;
             }
-            rows.add(buildSummary(resource, projectId, effStart, effEnd, periodLabel,
+            // Displayed window is bounded by the latest uploaded attendance date so calendar/working/
+            // present counts reflect only what's been uploaded; skip if nothing uploaded yet in this window.
+            LocalDate displayEnd = effEnd.isBefore(reportEnd) ? effEnd : reportEnd;
+            if (effStart.isAfter(displayEnd)) {
+                continue;
+            }
+            rows.add(buildSummary(resource, projectId, effStart, displayEnd, periodLabel,
                     a.getRole(), start, a.isActive(), a.getAssignmentEndDate(), effStart, effEnd, activityId));
         }
         if (rows.isEmpty()) {
             // No assignment period matched (e.g. assignment history not available) — one row over the activity.
             ProjectResource a = resolveAssignmentForProject(resource.getResId(), projectId);
-            rows.add(buildSummary(resource, projectId, aStart, aEnd, periodLabel,
+            LocalDate displayEnd = aEnd.isBefore(reportEnd) ? aEnd : reportEnd;
+            rows.add(buildSummary(resource, projectId, aStart, displayEnd, periodLabel,
                     a != null ? a.getRole() : null,
                     a != null ? a.getAssignmentStartDate() : null,
                     a != null && a.isActive(),
