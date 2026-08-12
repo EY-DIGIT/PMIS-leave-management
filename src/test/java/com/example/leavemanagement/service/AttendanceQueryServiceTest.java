@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -79,6 +81,9 @@ class AttendanceQueryServiceTest {
     @Mock
     private com.example.leavemanagement.client.ActivityDetailsClient activityDetailsClient;
 
+    @Mock
+    private ResourceBasedPeriodService resourceBasedPeriodService;
+
     // Real leave engine — the activity-window leave path is verified end-to-end.
     private final QuarterLeavePolicy policy = new QuarterLeavePolicy();
 
@@ -93,7 +98,15 @@ class AttendanceQueryServiceTest {
                 parser, attendanceRepository, holidayRepository, masterResourceRepository,
                 projectResourceRepository, leavePolicyClient, leaveRelaxationRepository,
                 quarterLeaveResolver, periodValidator, yearMappingRepository,
-                activityDetailsClient);
+                activityDetailsClient, resourceBasedPeriodService);
+        // No resource-based period by default → cost is not gated (existing numbers unchanged).
+        lenient().when(resourceBasedPeriodService.resolve(any())).thenReturn(Optional.empty());
+        // By default the activity-filtered attendance query mirrors the plain date-range one (ignores
+        // activityId), so existing tests' attendance stubs apply. Transfer tests override this explicitly.
+        lenient().when(attendanceRepository.findByResourceIdAndActivityIdAndAttendanceDateBetween(
+                        any(), any(), any(), any()))
+                .thenAnswer(inv -> attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                        inv.getArgument(0), inv.getArgument(2), inv.getArgument(3)));
     }
 
     private MultipartFile anyFile() {
@@ -598,6 +611,116 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
+    void transferToAnotherActivityDoesNotLeakThatActivitysAttendanceIntoThisOne() {
+        // Kuldeep worked A1 (Jan–Feb) then transferred to A2 (Mar). Same open project assignment. A1's report
+        // window is the whole activity, but only A1 attendance must count — the Mar A2 absences must NOT leak in.
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        ProjectResource assignment =
+                new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 7));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E1", "P1"))
+                .thenReturn(List.of(assignment));
+        when(projectResourceRepository.findByProjectIdAndRole("P1", "Program Manager"))
+                .thenReturn(List.of(assignment));
+        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6),
+                        List.of(new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0)))));
+        when(attendanceRepository.findMinDateByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(List.of(kuldeep));
+        when(attendanceRepository.existsByResIdAndActivityIdAndDateBetween(eq("E1"), eq("A1"), any(), any()))
+                .thenReturn(true);
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.empty());
+        // A1-filtered attendance: 2 absences in Jan (A1). The plain date-range query would ALSO include a
+        // March A2 absence — but the activity-filtered path must ignore it.
+        doReturn(List.of(
+                new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 7), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 8), AttendanceStatus.A)))
+                .when(attendanceRepository).findByResourceIdAndActivityIdAndAttendanceDateBetween(
+                        eq(1L), eq("A1"), any(), any());
+        // Date-range (unfiltered) attendance includes the March A2 absence — the code must NOT use this path.
+        lenient().when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
+                .thenReturn(List.of(
+                new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 7), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 8), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "A2", LocalDate.of(2026, 3, 9), AttendanceStatus.A)));
+
+        ActivityAttendanceReportResult report = service.activityReport("P1", "M1", "A1");
+        AttendanceReportSummary row = report.resources().get(0);
+
+        // Only the 2 A1 absences count — the March A2 absence is excluded.
+        assertThat(row.absentDays()).isEqualTo(2);
+        assertThat(row.leaveTaken()).isEqualTo(2.0);
+    }
+
+    @Test
+    void promotionYieldsTwoIndependentRowsPerDesignation() {
+        // Kuldeep promoted mid-activity: Program Manager 07-Jan..06-Mar, Program Director 07-Mar..06-Apr.
+        // Activity report returns TWO rows, each with its own designation and independent leave entitlement.
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        ProjectResource pmAssign =
+                new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 7));
+        pmAssign.setActive(false);
+        pmAssign.setAssignmentEndDate(LocalDate.of(2026, 3, 6));
+        ProjectResource pdAssign =
+                new ProjectResource(kuldeep, "P1", "Program Director", LocalDate.of(2026, 3, 7));
+
+        when(activityDetailsClient.getActivityDetails("ACT-001")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6),
+                        List.of(new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0),
+                                new ActivityResourceConfig("Program Director", 1, 3.0, 250000.0)))));
+        when(attendanceRepository.findMinDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(Optional.empty());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("ACT-001"), any(), any()))
+                .thenReturn(List.of(kuldeep));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E1", "P1"))
+                .thenReturn(List.of(pdAssign, pmAssign));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(pdAssign));
+        when(attendanceRepository.existsByResIdAndActivityIdAndDateBetween(eq("E1"), eq("ACT-001"), any(), any()))
+                .thenReturn(true);
+        when(projectResourceRepository.findByProjectIdAndRole("P1", "Program Manager"))
+                .thenReturn(List.of(pmAssign));
+        when(projectResourceRepository.findByProjectIdAndRole("P1", "Program Director"))
+                .thenReturn(List.of(pdAssign));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.empty());
+        // PM period [07-Jan..06-Mar]: 3 absences (quota 4 → paid 3). PD period [07-Mar..06-Apr]: 1 absence (quota 2 → paid 1).
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                eq(1L), eq(LocalDate.of(2026, 1, 7)), eq(LocalDate.of(2026, 3, 6)))).thenReturn(List.of(
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 7), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 8), AttendanceStatus.A),
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 1, 9), AttendanceStatus.A)));
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(
+                eq(1L), eq(LocalDate.of(2026, 3, 7)), eq(LocalDate.of(2026, 4, 6)))).thenReturn(List.of(
+                new Attendance(kuldeep, "P1", null, "M1", "ACT-001", LocalDate.of(2026, 3, 9), AttendanceStatus.A)));
+
+        ActivityAttendanceReportResult report = service.activityReport("P1", "M1", "ACT-001");
+
+        assertThat(report.resources()).hasSize(2);
+        AttendanceReportSummary pm = report.resources().stream()
+                .filter(r -> "Program Manager".equals(r.designation())).findFirst().orElseThrow();
+        AttendanceReportSummary pd = report.resources().stream()
+                .filter(r -> "Program Director".equals(r.designation())).findFirst().orElseThrow();
+
+        assertThat(pm.paidLeaveDays()).isEqualTo(3.0);   // PM own entitlement (prorated 4)
+        assertThat(pm.unpaidLeaveDays()).isEqualTo(0.0);
+        assertThat(pd.paidLeaveDays()).isEqualTo(1.0);   // PD independent entitlement (prorated 2)
+        assertThat(pd.unpaidLeaveDays()).isEqualTo(0.0);
+    }
+
+    @Test
     void replacementDetectedByLifecycleDatesEvenWithMultipleConfiguredSlots() {
         // Program Manager qty 2. Kuldeep 07-Jan..09-Feb (5 paid), Ravindra 07-Jan..active (independent),
         // Rahul joins 10-Feb..active. Rahul chains to Kuldeep by lifecycle dates (no replacedByResId),
@@ -766,6 +889,86 @@ class AttendanceQueryServiceTest {
         assertThat(cost.rateYear()).isEqualTo("Year-3");
         assertThat(cost.monthlyRate()).isEqualTo(88200.0);
         assertThat(cost.cost()).isEqualTo(85354.84);
+    }
+
+    @Test
+    void monthlyCostBillsOnlyDaysInsideResourceBasedPeriod() {
+        // July 2026, all present, rate 88200. Resource-based period starts 16-Jul-2026 → only
+        // 16..31 Jul (16 days) are billable: cost = round2(88200 × 16/31) = 45522.58.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
+        assignment.setRateYear("Year-3");
+        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(
+                Optional.of(new LeavePolicyResponse(null, null, null, null, null, null, 0, "QUARTERLY", null, false, null, null)));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        when(resourceBasedPeriodService.resolve("P1")).thenReturn(Optional.of(
+                new ResourceBasedPeriodService.ResourceBasedPeriod(
+                        LocalDate.of(2026, 7, 16), LocalDate.of(2032, 1, 1))));
+
+        List<Attendance> rows = new java.util.ArrayList<>();
+        for (LocalDate date = LocalDate.of(2026, 7, 1); !date.isAfter(LocalDate.of(2026, 7, 31));
+                date = date.plusDays(1)) {
+            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            rows.add(new Attendance(resource, "P1", null, "M1", null, date, AttendanceStatus.P));
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
+                .thenReturn(rows);
+
+        MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
+
+        // Attendance counts are unchanged — only billing is gated.
+        assertThat(cost.presentDays()).isEqualTo(23.0);
+        assertThat(cost.activeCalendarDays()).isEqualTo(16);
+        assertThat(cost.cost()).isEqualTo(45522.58);
+    }
+
+    @Test
+    void monthlyCostIsZeroWhenCycleFullyOutsideResourceBasedPeriod() {
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        when(masterResourceRepository.findByResId("E1")).thenReturn(Optional.of(resource));
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Java Dev", LocalDate.of(2020, 1, 1));
+        assignment.setRateYear("Year-3");
+        assignment.setRateCardByYear(Map.of("Year-3", 88200.0));
+        when(projectResourceRepository.findByResourceIdAndActiveTrue(1L)).thenReturn(Optional.of(assignment));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(
+                Optional.of(new LeavePolicyResponse(null, null, null, null, null, null, 0, "QUARTERLY", null, false, null, null)));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        // Resource-based period is entirely after July 2026 → nothing billable.
+        when(resourceBasedPeriodService.resolve("P1")).thenReturn(Optional.of(
+                new ResourceBasedPeriodService.ResourceBasedPeriod(
+                        LocalDate.of(2030, 1, 1), LocalDate.of(2032, 1, 1))));
+
+        List<Attendance> rows = new java.util.ArrayList<>();
+        for (LocalDate date = LocalDate.of(2026, 7, 1); !date.isAfter(LocalDate.of(2026, 7, 31));
+                date = date.plusDays(1)) {
+            if (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                    || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+                continue;
+            }
+            rows.add(new Attendance(resource, "P1", null, "M1", null, date, AttendanceStatus.P));
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
+                .thenReturn(rows);
+
+        MonthlyResourceCost cost = service.employeeMonthlyCost("E1", 2026, 7);
+
+        assertThat(cost.activeCalendarDays()).isZero();
+        assertThat(cost.cost()).isZero();
+        assertThat(cost.billableDays()).isZero();
     }
 
     @Test

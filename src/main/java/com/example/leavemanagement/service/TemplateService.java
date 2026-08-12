@@ -26,8 +26,6 @@ import org.springframework.stereotype.Service;
 public class TemplateService {
 
     private static final int TEMPLATE_EMPLOYEE_SLOTS = 15;
-    private static final String[] RATE_YEARS =
-            {"Year-1", "Year-2", "Year-3", "Year-4", "Year-5", "Year-6", "Year-7"};
 
     // ------------------------------------------------------------------
     // Attendance template
@@ -173,10 +171,13 @@ public class TemplateService {
      *
      * <p>Layout matches {@code DesignationRateParser}:
      * <ul>
-     *   <li>Row 0 — header: Role as per Contract | Year-1 Rate | … | Year-7 Rate
+     *   <li>Row 0 — header: Role as per Contract | Base Rate
      *   <li>Row 1 — italic format-hint row
      *   <li>Rows 2+ — empty data rows (one per role)
      * </ul>
+     *
+     * <p>The Base Rate is the project Year-1 monthly rate; later project years are generated from the
+     * upload's {@code increasePercentage} parameter, so only a single rate column is captured here.
      */
     public byte[] designationRateTemplate() {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
@@ -189,16 +190,12 @@ public class TemplateService {
             Row hdr = sheet.createRow(0);
             hdr.setHeightInPoints(18);
             cell(hdr, 0, "Role as per Contract", hdrStyle);
-            for (int i = 0; i < RATE_YEARS.length; i++) {
-                cell(hdr, 1 + i, RATE_YEARS[i] + " Rate", hdrStyle);
-            }
+            cell(hdr, 1, "Base Rate", hdrStyle);
 
             // Row 1 — format hint
             Row hint = sheet.createRow(1);
             cell(hint, 0, "e.g. Security Crypto Lead", noteStyle);
-            for (int i = 0; i < RATE_YEARS.length; i++) {
-                cell(hint, 1 + i, "monthly rate (number)", noteStyle);
-            }
+            cell(hint, 1, "Year-1 monthly rate (number)", noteStyle);
 
             // Empty data rows
             for (int r = 2; r < 2 + TEMPLATE_EMPLOYEE_SLOTS; r++) {
@@ -206,9 +203,7 @@ public class TemplateService {
             }
 
             sheet.setColumnWidth(0, 12000);
-            for (int i = 0; i < RATE_YEARS.length; i++) {
-                sheet.setColumnWidth(1 + i, 4500);
-            }
+            sheet.setColumnWidth(1, 4500);
 
             return toBytes(wb);
         } catch (IOException e) {

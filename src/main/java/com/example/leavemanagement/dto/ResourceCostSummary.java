@@ -1,5 +1,7 @@
 package com.example.leavemanagement.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -20,6 +22,9 @@ import java.util.List;
 public record ResourceCostSummary(
         String attendanceId,
         String employeeName,
+        String designation,
+        @JsonFormat(pattern = "dd-MM-yyyy") LocalDate assignmentFrom,
+        @JsonFormat(pattern = "dd-MM-yyyy") LocalDate assignmentTo,
         String projectId,
         String period,
         int calendarDays,

@@ -24,19 +24,19 @@ public class StubActivityDetailsClient implements ActivityDetailsClient {
             LocalDate.of(2026, 4, 6),
             List.of(
 
-					new ActivityResourceConfig("Application Operations - Testers (Staging)", 2, 3.0, 136064.00),
+					new ActivityResourceConfig("Senior Consultant Networking", 1, 3.0, 136064.00),
 
-					new ActivityResourceConfig("Application Security Engineer", 1, 2.0, 136064.00),
+					new ActivityResourceConfig("Consultant (Process/ procurement /security)", 1, 2.0, 136064.00),
 
-					new ActivityResourceConfig("Architect Dev Ops Automation", 2, 3.0, 211982.00),
+					new ActivityResourceConfig("Cloud Architect", 1, 3.0, 211982.00),
 
-					new ActivityResourceConfig("Build and Release Engineer", 1, 3.0, 123088.00),
+					new ActivityResourceConfig("Senior Consultant change Management", 1, 3.0, 123088.00),
 
 					new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.00),
 
-					new ActivityResourceConfig("Security Crypto Lead", 1, 3.0, 175600.00),
+					new ActivityResourceConfig("Cyber Security Architect", 1, 3.0, 175600.00),
 
-					new ActivityResourceConfig("Developer - Portals and Mobile Applications", 3, 3.0, 115420.00)));
+					new ActivityResourceConfig("Applications Engineer", 1, 3.0, 115420.00)));
 
     @Override
     public Optional<ActivityDetailsResponse> getActivityDetails(String activityId) {

@@ -54,8 +54,11 @@ public class DesignationRateController {
 
     @Operation(
             summary = "Upload designation rate card Excel",
-            description = "Parses the rate card Excel (Role as per Contract | Year-1 Rate | … | Year-7 Rate) "
-                    + "and upserts every role row for the given project and organisation. "
+            description = "Parses the rate card Excel (Role as per Contract | Base Rate) and upserts every "
+                    + "role row for the given project and organisation. The Base Rate is the project Year-1 "
+                    + "monthly rate; the later project years are generated as "
+                    + "Year-N = round(baseRate × (1 + increasePercentage/100)^(N-1), 2), aligned to the "
+                    + "project-year boundaries. "
                     + "Supply projectStartDate and projectEndDate to also store the project-year "
                     + "date-range mapping (Year-1 covers start → start+1yr−1day, etc.). "
                     + "Once stored, cost reports auto-select the correct rate year from the attendance "
@@ -75,10 +78,13 @@ public class DesignationRateController {
                             + "Required to auto-map attendance dates to rate years.")
                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
                     LocalDate projectEndDate,
+            @Parameter(description = "Annual rate increase percentage applied per project year "
+                            + "(e.g. 5 → each year's rate is 5% above the previous year). Defaults to 0.")
+                    @RequestParam(defaultValue = "0") double increasePercentage,
             @RequestPart("file") MultipartFile file) {
 
-        DesignationRateUploadResult result =
-                designationRateService.upload(file, projectId, organisationId, projectStartDate, projectEndDate);
+        DesignationRateUploadResult result = designationRateService.upload(
+                file, projectId, organisationId, projectStartDate, projectEndDate, increasePercentage);
         try {
             fileStorageService.save(file, "designation-rates/" + organisationId + "/" + projectId);
         } catch (Exception e) {

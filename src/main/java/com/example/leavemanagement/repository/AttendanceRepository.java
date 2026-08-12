@@ -16,6 +16,14 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
     List<Attendance> findByResourceIdAndAttendanceDateBetween(Long resourceId, LocalDate start, LocalDate end);
 
+    @Query("SELECT a FROM Attendance a WHERE a.resource.id = :resourceId AND a.activityId = :activityId "
+            + "AND a.attendanceDate BETWEEN :start AND :end")
+    List<Attendance> findByResourceIdAndActivityIdAndAttendanceDateBetween(
+            @Param("resourceId") Long resourceId,
+            @Param("activityId") String activityId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
     List<Attendance> findByProjectIdAndAttendanceDateBetween(String projectId, LocalDate start, LocalDate end);
 
     List<Attendance> findByAttendanceDateBetween(LocalDate start, LocalDate end);
@@ -44,6 +52,14 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
     @Query("SELECT COUNT(a) > 0 FROM Attendance a WHERE a.resource.resId = :resId AND a.attendanceDate BETWEEN :start AND :end")
     boolean existsByResIdAndDateBetween(
             @Param("resId") String resId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
+    @Query("SELECT COUNT(a) > 0 FROM Attendance a WHERE a.resource.resId = :resId "
+            + "AND a.activityId = :activityId AND a.attendanceDate BETWEEN :start AND :end")
+    boolean existsByResIdAndActivityIdAndDateBetween(
+            @Param("resId") String resId,
+            @Param("activityId") String activityId,
             @Param("start") LocalDate start,
             @Param("end") LocalDate end);
 

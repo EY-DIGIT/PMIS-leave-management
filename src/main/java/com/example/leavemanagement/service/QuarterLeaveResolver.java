@@ -79,6 +79,7 @@ public class QuarterLeaveResolver {
             Long resourceId,
             String projectId,
             String organisationId,
+            String designation,
             LocalDate joiningDate,
             LocalDate windowStart,
             LocalDate windowEnd,
@@ -89,7 +90,7 @@ public class QuarterLeaveResolver {
 
         List<ProjectResource> predecessorChain =
                 (resId != null && projectId != null)
-                        ? findPredecessorChain(resId, projectId, windowStart, windowEnd)
+                        ? findPredecessorChain(resId, projectId, designation, joiningDate, windowStart, windowEnd)
                         : List.of();
 
         if (predecessorChain.isEmpty()) {
@@ -153,19 +154,14 @@ public class QuarterLeaveResolver {
      * Returned oldest-first.
      */
     private List<ProjectResource> findPredecessorChain(
-            String resId, String projectId, LocalDate windowStart, LocalDate windowEnd) {
-        ProjectResource current = projectResourceRepository
-                .findByResource_ResIdAndProjectIdAndActiveTrue(resId, projectId)
-                .or(() -> projectResourceRepository
-                        .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(resId, projectId)
-                        .stream().findFirst())
-                .orElse(null);
-        if (current == null || current.getRole() == null || current.getAssignmentStartDate() == null) {
+            String resId, String projectId, String designation, LocalDate joiningDate,
+            LocalDate windowStart, LocalDate windowEnd) {
+        if (designation == null || joiningDate == null) {
             return List.of();
         }
 
         List<ProjectResource> candidates = projectResourceRepository
-                .findByProjectIdAndRole(projectId, current.getRole()).stream()
+                .findByProjectIdAndRole(projectId, designation).stream()
                 .filter(pr -> pr.getAssignmentStartDate() != null
                         && !pr.getAssignmentStartDate().isAfter(windowEnd)
                         && (pr.getAssignmentEndDate() == null || !pr.getAssignmentEndDate().isBefore(windowStart)))
@@ -174,9 +170,9 @@ public class QuarterLeaveResolver {
         List<ProjectResource> chain = new ArrayList<>();
         Set<String> visited = new HashSet<>();
         visited.add(resId);
-        ProjectResource cursor = current;
+        LocalDate joinDateCursor = joiningDate;
         while (true) {
-            LocalDate joinDate = cursor.getAssignmentStartDate();
+            LocalDate joinDate = joinDateCursor;
             ProjectResource predecessor = null;
             for (ProjectResource cand : candidates) {
                 LocalDate end = cand.getAssignmentEndDate();
@@ -193,7 +189,7 @@ public class QuarterLeaveResolver {
             if (predecessor == null) break;
             visited.add(predecessor.getResource().getResId());
             chain.add(predecessor);
-            cursor = predecessor;
+            joinDateCursor = predecessor.getAssignmentStartDate();
         }
         Collections.reverse(chain);
         return chain;

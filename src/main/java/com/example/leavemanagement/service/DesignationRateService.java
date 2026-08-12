@@ -30,14 +30,17 @@ public class DesignationRateService {
     private final DesignationRateParser parser;
     private final DesignationRateMasterRepository repository;
     private final ProjectYearMappingRepository yearMappingRepository;
+    private final ResourceBasedPeriodService resourceBasedPeriodService;
 
     public DesignationRateService(
             DesignationRateParser parser,
             DesignationRateMasterRepository repository,
-            ProjectYearMappingRepository yearMappingRepository) {
+            ProjectYearMappingRepository yearMappingRepository,
+            ResourceBasedPeriodService resourceBasedPeriodService) {
         this.parser = parser;
         this.repository = repository;
         this.yearMappingRepository = yearMappingRepository;
+        this.resourceBasedPeriodService = resourceBasedPeriodService;
     }
 
     /**
@@ -53,24 +56,65 @@ public class DesignationRateService {
     @Transactional
     public DesignationRateUploadResult upload(
             MultipartFile file, String projectId, String organisationId,
-            LocalDate projectStartDate, LocalDate projectEndDate) {
+            LocalDate projectStartDate, LocalDate projectEndDate, double increasePercentage) {
         List<DesignationRateRow> rows = parser.parse(file);
+
+        // The rate-year windows are anchored to the RESOURCE-BASED PHASE start, not the project start:
+        // billing only begins once the resource-based phase starts, so rate Year-1 (the base rate) must
+        // apply from that date and step yearly until the resource-based period ends. Fall back to the
+        // supplied project dates only when the phases are unavailable (mock off / call failed).
+        LocalDate anchorStart = projectStartDate;
+        LocalDate anchorEnd = projectEndDate;
+        var resourceBased = resourceBasedPeriodService.resolve(projectId);
+        if (resourceBased.isPresent()) {
+            anchorStart = resourceBased.get().from();
+            anchorEnd = resourceBased.get().to();
+        }
+
+        // Compute the year boundaries first — the generated rate card is aligned to these rateYear keys
+        // ("Year-1"…"Year-N"). When no anchor dates are available we fall back to a plain seven-year card
+        // so the rate resolver still finds a value.
+        List<ProjectYearMappingRow> yearMappings = List.of();
+        if (anchorStart != null && anchorEnd != null) {
+            yearMappings = upsertYearMappings(projectId, organisationId, anchorStart, anchorEnd);
+        }
+        List<String> rateYears = yearMappings.isEmpty()
+                ? defaultRateYears()
+                : yearMappings.stream().map(ProjectYearMappingRow::rateYear).toList();
+
         int upserted = 0;
         for (DesignationRateRow row : rows) {
             DesignationRateMaster entity = repository
                     .findByRoleAndProjectIdAndOrganisationId(row.role(), projectId, organisationId)
                     .orElseGet(() -> new DesignationRateMaster(row.role(), projectId, organisationId));
-            entity.setRateCardByYear(row.rateCardByYear());
+            entity.setRateCardByYear(generateRateCard(row.baseRate(), increasePercentage, rateYears));
             repository.save(entity);
             upserted++;
         }
 
-        List<ProjectYearMappingRow> yearMappings = List.of();
-        if (projectStartDate != null && projectEndDate != null) {
-            yearMappings = upsertYearMappings(projectId, organisationId, projectStartDate, projectEndDate);
-        }
-
         return new DesignationRateUploadResult(projectId, organisationId, rows.size(), upserted, yearMappings);
+    }
+
+    /**
+     * Generates a rate-year → monthly-rate map from a base (project Year-1) rate and a fixed annual
+     * increase percentage: {@code Year-N = round(baseRate × (1 + inc/100)^(N-1), 2)}. The first year
+     * (index 0) is exactly the base rate; each subsequent year compounds the increase once.
+     */
+    private static java.util.Map<String, Double> generateRateCard(
+            double baseRate, double increasePercentage, List<String> rateYears) {
+        java.util.Map<String, Double> card = new java.util.LinkedHashMap<>();
+        double factor = 1 + (increasePercentage / 100.0);
+        for (int i = 0; i < rateYears.size(); i++) {
+            double rate = baseRate * Math.pow(factor, i);
+            card.put(rateYears.get(i), Math.round(rate * 100.0) / 100.0);
+        }
+        return card;
+    }
+
+    private static List<String> defaultRateYears() {
+        List<String> years = new ArrayList<>();
+        for (int y = 1; y <= 7; y++) years.add("Year-" + y);
+        return years;
     }
 
     /** Returns all roles defined for the given project/organisation, sorted alphabetically. */
@@ -121,6 +165,9 @@ public class DesignationRateService {
      */
     private List<ProjectYearMappingRow> upsertYearMappings(
             String projectId, String organisationId, LocalDate startDate, LocalDate endDate) {
+        // Clear any previously computed windows first so a changed anchor (e.g. project start →
+        // resource-based start) leaves no stale rows that would overlap and break findEffectiveOn.
+        yearMappingRepository.deleteByProjectIdAndOrganisationId(projectId, organisationId);
         List<ProjectYearMappingRow> result = new ArrayList<>();
         for (int year = 1; year <= 7; year++) {
             LocalDate from = startDate.plusYears(year - 1);
