@@ -3,6 +3,7 @@ package com.example.leavemanagement.service;
 import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.ActivityHolidayReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
@@ -15,6 +16,7 @@ import com.example.leavemanagement.dto.EmployeeAttendanceByDate;
 import com.example.leavemanagement.dto.LeavePolicyResponse;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.QuarterLeaveCalculation;
+import com.example.leavemanagement.dto.ResourceAvailabilityReport;
 import com.example.leavemanagement.dto.ResourceCostResult;
 import com.example.leavemanagement.dto.ResourceCostSummary;
 import com.example.leavemanagement.dto.ResourceCostTotals;
@@ -887,6 +889,159 @@ public class AttendanceQueryService {
         if (year < 1970 || year > 9999) {
             throw new BadRequestException("year must be between 1970 and 9999");
         }
+    }
+
+    /**
+     * Monthly resource-availability report for UIDAI SLA 007 (Minimum Resource Availability): the
+     * business days attended and total working hours logged per resource in the month, with the
+     * derived SLA severity level. Pass {@code resourceId} to scope to one resource, or leave it blank
+     * for every resource active on the project during the month.
+     */
+    @Transactional(readOnly = true)
+    public ResourceAvailabilityReport availabilityReport(
+            String projectId, int year, int month, String resourceId) {
+        validateMonthAndYear(year, month);
+        LocalDate from = LocalDate.of(year, month, 1);
+        LocalDate to = from.withDayOfMonth(from.lengthOfMonth());
+        String periodLabel = from.format(MONTH_YEAR);
+        periodValidator.validate(from, to, projectId, resourceId, periodLabel);
+
+        boolean hasResourceFilter = resourceId != null && !resourceId.isBlank();
+        List<ResourceAvailabilityReport.ResourceAvailability> rows =
+                latestAssignmentsActiveDuring(projectId, from, to).stream()
+                        .filter(pr -> !hasResourceFilter || resourceId.equals(pr.getResource().getResId()))
+                        .map(pr -> buildAvailability(pr, from, to))
+                        .toList();
+        return new ResourceAvailabilityReport(projectId, year, month, periodLabel, rows.size(), rows);
+    }
+
+    private ResourceAvailabilityReport.ResourceAvailability buildAvailability(
+            ProjectResource assignment, LocalDate from, LocalDate to) {
+        MasterResource resource = assignment.getResource();
+        LocalDate joiningDate = assignment.getAssignmentStartDate();
+        LocalDate lastWorkingDate = assignment.getAssignmentEndDate();
+        LocalDate effStart = (joiningDate != null && joiningDate.isAfter(from)) ? joiningDate : from;
+        LocalDate effEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(to)) ? lastWorkingDate : to;
+
+        List<Attendance> rows = effStart.isAfter(effEnd) ? List.of()
+                : attendanceRepository.findByResourceIdAndAttendanceDateBetween(resource.getId(), effStart, effEnd);
+        AvailabilityCounts c = availabilityOf(rows);
+
+        return new ResourceAvailabilityReport.ResourceAvailability(
+                resource.getResId(), resource.getName(), assignment.getRole(),
+                c.businessDays(), c.presentDays(), c.totalHours(),
+                slaSeverity(c.businessDays(), c.totalHours()));
+    }
+
+    /**
+     * Activity-scoped monthly availability report for UIDAI SLA 007. Filtered by project + activity,
+     * it returns — per resource with attendance under the activity — a calendar-month breakdown of
+     * business days and working hours, each month carrying its own SLA severity. Pass {@code
+     * resourceId} to scope to a single resource. Only months with uploaded attendance appear, so the
+     * breakup grows month-by-month with each upload.
+     */
+    @Transactional(readOnly = true)
+    public ActivityAvailabilityReport activityAvailabilityReport(
+            String projectId, String activityId, String resourceId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
+        }
+        LocalDate aStart = activity.startDate();
+        LocalDate aEnd = activity.endDate();
+        String activityName = activity.activityName() != null ? activity.activityName() : activityId;
+        String periodLabel = aStart.format(PERIOD_DATE_FMT) + " to " + aEnd.format(PERIOD_DATE_FMT);
+        // Bound to what's uploaded so the breakup only shows captured months.
+        LocalDate reportEnd = attendanceRepository
+                .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aStart);
+
+        boolean hasResourceFilter = resourceId != null && !resourceId.isBlank();
+        List<ActivityAvailabilityReport.ResourceAvailability> rows = attendanceRepository
+                .findDistinctResourcesByActivityIdAndDateBetween(activityId, aStart, reportEnd).stream()
+                .filter(resource -> !hasResourceFilter || resourceId.equals(resource.getResId()))
+                .map(resource -> buildActivityAvailability(resource, projectId, activityId, aStart, aEnd, reportEnd))
+                .toList();
+        return new ActivityAvailabilityReport(
+                projectId, activityId, activityName, periodLabel, aStart, aEnd, rows.size(), rows);
+    }
+
+    private ActivityAvailabilityReport.ResourceAvailability buildActivityAvailability(
+            MasterResource resource, String projectId, String activityId,
+            LocalDate aStart, LocalDate aEnd, LocalDate reportEnd) {
+        ProjectResource assignment = resolveAssignmentForProject(resource.getResId(), projectId);
+        LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
+        LocalDate lastWorkingDate = assignment != null ? assignment.getAssignmentEndDate() : null;
+        LocalDate effStart = (joiningDate != null && joiningDate.isAfter(aStart)) ? joiningDate : aStart;
+        LocalDate windowEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(aEnd)) ? lastWorkingDate : aEnd;
+        LocalDate effEnd = windowEnd.isBefore(reportEnd) ? windowEnd : reportEnd;
+
+        List<ActivityAvailabilityReport.MonthlyAvailability> monthly = new ArrayList<>();
+        int totalBusinessDays = 0;
+        double totalPresentDays = 0.0;
+        double totalHours = 0.0;
+
+        LocalDate cursor = effStart;
+        while (!cursor.isAfter(effEnd)) {
+            LocalDate monthEnd = cursor.withDayOfMonth(cursor.lengthOfMonth());
+            LocalDate segEnd = monthEnd.isBefore(effEnd) ? monthEnd : effEnd;
+            List<Attendance> rows = attendanceRepository
+                    .findByResourceIdAndActivityIdAndAttendanceDateBetween(
+                            resource.getId(), activityId, cursor, segEnd);
+            if (!rows.isEmpty()) {
+                AvailabilityCounts c = availabilityOf(rows);
+                monthly.add(new ActivityAvailabilityReport.MonthlyAvailability(
+                        cursor.getYear(), cursor.getMonthValue(), cursor.format(MONTH_YEAR),
+                        cursor, segEnd, c.businessDays(), c.presentDays(), c.totalHours(),
+                        slaSeverity(c.businessDays(), c.totalHours())));
+                totalBusinessDays += c.businessDays();
+                totalPresentDays += c.presentDays();
+                totalHours += c.totalHours();
+            }
+            cursor = monthEnd.plusDays(1);
+        }
+
+        return new ActivityAvailabilityReport.ResourceAvailability(
+                resource.getResId(), resource.getName(),
+                assignment != null ? assignment.getRole() : null,
+                totalBusinessDays, round2(totalPresentDays), round2(totalHours), monthly);
+    }
+
+    /** Present/half/WFH day counts and total logged hours for a set of attendance rows. */
+    private record AvailabilityCounts(int businessDays, double presentDays, double totalHours) {}
+
+    private AvailabilityCounts availabilityOf(List<Attendance> rows) {
+        int presentRaw = 0;
+        int halfDays = 0;
+        int wfhDays = 0;
+        double totalHours = 0.0;
+        for (Attendance a : rows) {
+            switch (a.getStatus()) {
+                case P -> presentRaw++;
+                case HD -> halfDays++;
+                case WFH -> wfhDays++;
+                default -> { /* A / L / etc. — no attended day */ }
+            }
+            if (a.getWorkingHours() != null) {
+                totalHours += a.getWorkingHours();
+            }
+        }
+        // Business days = days the resource actually logged attendance (present, half-day, or WFH).
+        return new AvailabilityCounts(presentRaw + halfDays + wfhDays, presentRaw + halfDays * 0.5, round2(totalHours));
+    }
+
+    /**
+     * UIDAI SLA 007 applied severity: 0 when {@code businessDays >= 16 and hours >= 144}; 2 when
+     * {@code businessDays >= 12 and hours >= 108}; otherwise 4. Monotonic reading of the SLA tiers.
+     */
+    private static int slaSeverity(int businessDays, double hours) {
+        if (businessDays >= 16 && hours >= 144) {
+            return 0;
+        }
+        if (businessDays >= 12 && hours >= 108) {
+            return 2;
+        }
+        return 4;
     }
 
     /** Dashboard: one month's cost per resource active on the project during that month. */

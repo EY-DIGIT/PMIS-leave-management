@@ -1,6 +1,7 @@
 package com.example.leavemanagement.controller;
 
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
+import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.ActivityHolidayReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
@@ -9,6 +10,7 @@ import com.example.leavemanagement.dto.AttendanceUploadResult;
 import com.example.leavemanagement.dto.EmployeeLeaveDetail;
 import com.example.leavemanagement.dto.QuarterlyRelaxationRequest;
 import com.example.leavemanagement.dto.RelaxationEligibilityResponse;
+import com.example.leavemanagement.dto.ResourceAvailabilityReport;
 import com.example.leavemanagement.entity.LeaveRelaxation;
 import com.example.leavemanagement.service.AttendanceQueryService;
 import com.example.leavemanagement.service.FileStorageService;
@@ -111,6 +113,38 @@ public class AttendanceController {
             @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
             @Parameter(description = "Month (1-12)", example = "7") @RequestParam("month") int month) {
         return attendanceQueryService.monthlyReport(projectId, year, month);
+    }
+
+    @Operation(
+            summary = "Monthly resource availability (UIDAI SLA 007)",
+            description = "For each resource active on 'projectId' in the given month, returns the business "
+                    + "days attended and total working hours logged (from biometric attendance), plus the "
+                    + "derived SLA 007 severity level (0: >=16 days & >=144 hrs; 2: >=12 days & >=108 hrs; "
+                    + "else 4). Pass resourceId to scope to a single resource.")
+    @GetMapping("/report/availability")
+    public ResourceAvailabilityReport availabilityReport(
+            @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
+            @Parameter(description = "Year", example = "2026") @RequestParam("year") int year,
+            @Parameter(description = "Month (1-12)", example = "2") @RequestParam("month") int month,
+            @Parameter(description = "res_id (Attendance ID) — optional, to scope to one resource")
+                    @RequestParam(required = false) String resourceId) {
+        return attendanceQueryService.availabilityReport(projectId, year, month, resourceId);
+    }
+
+    @Operation(
+            summary = "Activity resource availability with monthly breakup (UIDAI SLA 007)",
+            description = "Filtered by projectId + activityId. For each resource with attendance under the "
+                    + "activity, returns a calendar-month breakdown of business days attended and total "
+                    + "working hours logged, each month carrying its own SLA 007 severity, plus cumulative "
+                    + "totals. Only months with uploaded attendance appear, so the breakup grows month-by-"
+                    + "month with each upload. Pass resourceId to scope to a single resource.")
+    @GetMapping("/report/availability/activity")
+    public ActivityAvailabilityReport activityAvailabilityReport(
+            @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam("activityId") String activityId,
+            @Parameter(description = "res_id (Attendance ID) — optional, to scope to one resource")
+                    @RequestParam(required = false) String resourceId) {
+        return attendanceQueryService.activityAvailabilityReport(projectId, activityId, resourceId);
     }
 
     /**

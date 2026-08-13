@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -21,7 +22,9 @@ import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.ActivityResourceConfig;
+import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
+import com.example.leavemanagement.dto.ResourceAvailabilityReport;
 import com.example.leavemanagement.entity.Attendance;
 import com.example.leavemanagement.entity.AttendanceStatus;
 import com.example.leavemanagement.entity.MasterResource;
@@ -846,6 +849,134 @@ class AttendanceQueryServiceTest {
     // ------------------------------------------------------------------
     // Resource cost calculator
     // ------------------------------------------------------------------
+
+    @Test
+    void availabilityReportSumsBusinessDaysAndHoursAndDerivesSlaSeverity() {
+        // Feb 2026: 16 present weekdays @ 9h = 144h → SLA 007 severity 0.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Program Manager", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByProjectIdActiveDuring(eq("P1"), any(), any()))
+                .thenReturn(List.of(assignment));
+
+        List<Attendance> rows = new java.util.ArrayList<>();
+        LocalDate date = LocalDate.of(2026, 2, 1);
+        int added = 0;
+        while (added < 16) {
+            if (date.getDayOfWeek() != java.time.DayOfWeek.SATURDAY
+                    && date.getDayOfWeek() != java.time.DayOfWeek.SUNDAY) {
+                Attendance a = new Attendance(resource, "P1", null, "M1", null, date, AttendanceStatus.P);
+                a.setWorkingHours(9.0);
+                rows.add(a);
+                added++;
+            }
+            date = date.plusDays(1);
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
+                .thenReturn(rows);
+
+        ResourceAvailabilityReport report = service.availabilityReport("P1", 2026, 2, null);
+
+        assertThat(report.resources()).hasSize(1);
+        ResourceAvailabilityReport.ResourceAvailability r = report.resources().get(0);
+        assertThat(r.attendanceId()).isEqualTo("E1");
+        assertThat(r.designation()).isEqualTo("Program Manager");
+        assertThat(r.businessDays()).isEqualTo(16);
+        assertThat(r.totalWorkingHours()).isEqualTo(144.0);
+        assertThat(r.presentDays()).isEqualTo(16.0);
+        assertThat(r.slaSeverity()).isZero();
+    }
+
+    @Test
+    void availabilityReportDerivesSeverity4WhenBelowThresholds() {
+        // Only 10 present days @ 8h = 80h → < 12 days & < 108 hrs → severity 4.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Sanju");
+        setId(resource, 1L);
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Program Manager", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByProjectIdActiveDuring(eq("P1"), any(), any()))
+                .thenReturn(List.of(assignment));
+
+        List<Attendance> rows = new java.util.ArrayList<>();
+        LocalDate date = LocalDate.of(2026, 2, 2);
+        for (int i = 0; i < 10; i++) {
+            Attendance a = new Attendance(resource, "P1", null, "M1", null, date.plusDays(i), AttendanceStatus.P);
+            a.setWorkingHours(8.0);
+            rows.add(a);
+        }
+        when(attendanceRepository.findByResourceIdAndAttendanceDateBetween(eq(1L), any(), any()))
+                .thenReturn(rows);
+
+        ResourceAvailabilityReport.ResourceAvailability r =
+                service.availabilityReport("P1", 2026, 2, null).resources().get(0);
+        assertThat(r.businessDays()).isEqualTo(10);
+        assertThat(r.totalWorkingHours()).isEqualTo(80.0);
+        assertThat(r.slaSeverity()).isEqualTo(4);
+    }
+
+    @Test
+    void activityAvailabilityReportGivesMonthlyBreakupWithHoursAndSeverity() {
+        // Activity A1 (07-Jan..06-Apr). Two months uploaded (reportEnd = 28-Feb).
+        // Jan: 16 days @ 9h = 144h → severity 0. Feb: 10 days @ 8h = 80h → severity 4.
+        MasterResource resource = new MasterResource("E1");
+        resource.setName("Kuldeep");
+        setId(resource, 1L);
+        ProjectResource assignment = new ProjectResource(resource, "P1", "Program Manager", LocalDate.of(2020, 1, 1));
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
+                .thenReturn(Optional.of(assignment));
+        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6), List.of())));
+        when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(Optional.of(LocalDate.of(2026, 2, 28)));
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(List.of(resource));
+
+        List<Attendance> all = new java.util.ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            Attendance a = new Attendance(resource, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 7).plusDays(i), AttendanceStatus.P);
+            a.setWorkingHours(9.0);
+            all.add(a);
+        }
+        for (int i = 0; i < 10; i++) {
+            Attendance a = new Attendance(resource, "P1", null, "M1", "A1", LocalDate.of(2026, 2, 2).plusDays(i), AttendanceStatus.P);
+            a.setWorkingHours(8.0);
+            all.add(a);
+        }
+        // doAnswer(...).when(...) so this overrides the @BeforeEach lenient delegation stub.
+        doAnswer(inv -> {
+            LocalDate s = inv.getArgument(2);
+            LocalDate e = inv.getArgument(3);
+            return all.stream()
+                    .filter(a -> !a.getAttendanceDate().isBefore(s) && !a.getAttendanceDate().isAfter(e))
+                    .toList();
+        }).when(attendanceRepository)
+                .findByResourceIdAndActivityIdAndAttendanceDateBetween(eq(1L), eq("A1"), any(), any());
+
+        ActivityAvailabilityReport report = service.activityAvailabilityReport("P1", "A1", null);
+
+        assertThat(report.resources()).hasSize(1);
+        ActivityAvailabilityReport.ResourceAvailability r = report.resources().get(0);
+        assertThat(r.designation()).isEqualTo("Program Manager");
+        assertThat(r.totalBusinessDays()).isEqualTo(26);
+        assertThat(r.totalWorkingHours()).isEqualTo(224.0);
+        assertThat(r.monthlyBreakup()).hasSize(2);
+
+        ActivityAvailabilityReport.MonthlyAvailability jan = r.monthlyBreakup().get(0);
+        assertThat(jan.period()).isEqualTo("January 2026");
+        assertThat(jan.fromDate()).isEqualTo(LocalDate.of(2026, 1, 7));
+        assertThat(jan.toDate()).isEqualTo(LocalDate.of(2026, 1, 31));
+        assertThat(jan.businessDays()).isEqualTo(16);
+        assertThat(jan.totalWorkingHours()).isEqualTo(144.0);
+        assertThat(jan.slaSeverity()).isZero();
+
+        ActivityAvailabilityReport.MonthlyAvailability feb = r.monthlyBreakup().get(1);
+        assertThat(feb.period()).isEqualTo("February 2026");
+        assertThat(feb.toDate()).isEqualTo(LocalDate.of(2026, 2, 28));
+        assertThat(feb.businessDays()).isEqualTo(10);
+        assertThat(feb.totalWorkingHours()).isEqualTo(80.0);
+        assertThat(feb.slaSeverity()).isEqualTo(4);
+    }
 
     @Test
     void employeeMonthlyCostMatchesWorkedExample() {
