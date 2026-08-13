@@ -3,6 +3,7 @@ package com.example.leavemanagement.controller;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.ActivityHolidayReport;
+import com.example.leavemanagement.dto.ActivityReplacementOverlapReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.AttendanceReportResult;
@@ -225,6 +226,21 @@ public class AttendanceController {
             @Parameter(description = "Project id") @RequestParam String projectId,
             @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
         return attendanceQueryService.activityReplacements(projectId, activityId);
+    }
+
+    @Operation(
+            summary = "Activity resource-replacement overlap (UIDAI SLA 006)",
+            description = "For each resource replacement on the activity, computes the overlap between the "
+                    + "incoming resource's joining date and the outgoing resource's last working date, counted "
+                    + "in WORKING DAYS against the UIDAI working-day/holiday calendar (weekends and public "
+                    + "holidays excluded), not raw calendar days. Returns only the SLA006 result "
+                    + "('Overlap >= 20 Working Days' or 'Overlap < 20 Working Days') — no severity level. "
+                    + "If the incoming resource joins after the outgoing's last day there is no overlap (0 days).")
+    @GetMapping("/report/activity/replacement-overlap")
+    public ActivityReplacementOverlapReport activityReplacementOverlaps(
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
+        return attendanceQueryService.activityReplacementOverlaps(projectId, activityId);
     }
 
     /**

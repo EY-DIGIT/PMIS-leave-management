@@ -136,13 +136,11 @@ public class MasterResourceService {
                 throw new BadRequestException("Resource " + row.resId() + " cannot replace itself.");
             }
 
-            // Resolve role and start date of the replacement from batch or DB.
+            // Resolve the role of the replacement from batch or DB (used for the same-designation rule).
             String replacementRole;
-            LocalDate replacementStartDate;
             ResourceRow replacementRow = rowByResId.get(replacementId);
             if (replacementRow != null) {
                 replacementRole = replacementRow.role();
-                replacementStartDate = replacementRow.dateOfJoining();
             } else {
                 ProjectResource existing = projectResourceRepository
                         .findByResource_ResIdAndProjectIdAndActiveTrue(replacementId, projectId)
@@ -151,7 +149,6 @@ public class MasterResourceService {
                                         + row.resId() + "') was not found in the upload or as an active"
                                         + " assignment on project " + projectId + "."));
                 replacementRole = existing.getRole();
-                replacementStartDate = existing.getAssignmentStartDate();
             }
 
             // Rule: same designation.
@@ -162,14 +159,10 @@ public class MasterResourceService {
                                 + "). The replacement must have the same designation.");
             }
 
-            // Rule: replacement start date must be on or after the outgoing resource's end date.
-            if (row.lastDayOfWorking() != null && replacementStartDate != null
-                    && replacementStartDate.isBefore(row.lastDayOfWorking())) {
-                throw new BadRequestException(
-                        "Replacement resource '" + replacementId + "' start date (" + replacementStartDate
-                                + ") must be on or after '" + row.resId() + "' end date ("
-                                + row.lastDayOfWorking() + ").");
-            }
+            // NOTE: an overlap between the incoming resource's start and the outgoing resource's last
+            // working day is intentionally allowed — a knowledge-transfer overlap is expected and is
+            // measured by UIDAI SLA 006 (replacement overlap working days). So we do NOT require the
+            // replacement to start on/after the outgoing resource's end date.
 
             // Rule: no circular chain (A → B → … → A).
             Set<String> chain = new LinkedHashSet<>();

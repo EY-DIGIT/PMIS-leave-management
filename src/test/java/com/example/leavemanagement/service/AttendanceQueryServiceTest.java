@@ -22,6 +22,7 @@ import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.ActivityResourceConfig;
 import com.example.leavemanagement.dto.ActivityAvailabilityReport;
+import com.example.leavemanagement.dto.ActivityReplacementOverlapReport;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.ResourceAvailabilityReport;
 import com.example.leavemanagement.entity.Attendance;
@@ -976,6 +977,75 @@ class AttendanceQueryServiceTest {
         assertThat(c2.resourceCount()).isEqualTo(1);
         assertThat(c2.totalBusinessDays()).isEqualTo(10);
         assertThat(c2.totalWorkingHours()).isEqualTo(80.0);
+    }
+
+    @Test
+    void replacementOverlapCountsWorkingDaysAndReturnsSla006Result() {
+        // SLA006 Activity 1: incoming joins 14-Aug-2026, outgoing last day 05-Sep-2026.
+        // 14-Aug (Fri) → 05-Sep (Sat) = 23 calendar days but 16 weekdays → "Overlap < 20 Working Days".
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource newRes = new MasterResource("E2");
+        newRes.setName("New Resource");
+        setId(newRes, 2L);
+
+        ProjectResource outgoing = new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 1));
+        outgoing.setActive(false);
+        outgoing.setAssignmentEndDate(LocalDate.of(2026, 9, 5));
+        outgoing.setReplacedByResId("E2");
+        ProjectResource incoming = new ProjectResource(newRes, "P1", "Program Manager", LocalDate.of(2026, 8, 14));
+
+        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 30), List.of())));
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(outgoing));
+        when(attendanceRepository.existsByResIdAndActivityIdAndDateBetween(eq("E1"), eq("A1"), any(), any()))
+                .thenReturn(true);
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E2", "P1"))
+                .thenReturn(List.of(incoming));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+
+        ActivityReplacementOverlapReport report = service.activityReplacementOverlaps("P1", "A1");
+
+        assertThat(report.replacements()).hasSize(1);
+        ActivityReplacementOverlapReport.ReplacementOverlap o = report.replacements().get(0);
+        assertThat(o.slaNumber()).isEqualTo("SLA006");
+        assertThat(o.outgoingResId()).isEqualTo("E1");
+        assertThat(o.incomingResId()).isEqualTo("E2");
+        assertThat(o.overlapStartDate()).isEqualTo(LocalDate.of(2026, 8, 14));
+        assertThat(o.overlapEndDate()).isEqualTo(LocalDate.of(2026, 9, 5));
+        assertThat(o.overlapWorkingDays()).isEqualTo(16);
+        assertThat(o.slaResult()).isEqualTo("Overlap < 20 Working Days");
+    }
+
+    @Test
+    void replacementOverlapIsZeroWhenIncomingJoinsAfterOutgoingLeaves() {
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource newRes = new MasterResource("E2");
+        newRes.setName("New Resource");
+        setId(newRes, 2L);
+
+        ProjectResource outgoing = new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 1));
+        outgoing.setActive(false);
+        outgoing.setAssignmentEndDate(LocalDate.of(2026, 8, 10));
+        outgoing.setReplacedByResId("E2");
+        // Incoming joins AFTER outgoing's last day → no overlap.
+        ProjectResource incoming = new ProjectResource(newRes, "P1", "Program Manager", LocalDate.of(2026, 8, 20));
+
+        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 30), List.of())));
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(outgoing));
+        when(attendanceRepository.existsByResIdAndActivityIdAndDateBetween(eq("E1"), eq("A1"), any(), any()))
+                .thenReturn(true);
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E2", "P1"))
+                .thenReturn(List.of(incoming));
+
+        ActivityReplacementOverlapReport.ReplacementOverlap o =
+                service.activityReplacementOverlaps("P1", "A1").replacements().get(0);
+        assertThat(o.overlapWorkingDays()).isZero();
+        assertThat(o.slaResult()).isEqualTo("Overlap < 20 Working Days");
     }
 
     @Test

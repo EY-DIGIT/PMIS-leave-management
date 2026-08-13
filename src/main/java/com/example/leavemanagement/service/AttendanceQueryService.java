@@ -5,6 +5,7 @@ import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.ActivityHolidayReport;
+import com.example.leavemanagement.dto.ActivityReplacementOverlapReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
@@ -599,6 +600,84 @@ public class AttendanceQueryService {
                 activityId, activityName, projectId,
                 activity.startDate(), activity.endDate(),
                 totalReplacements, designations);
+    }
+
+    /**
+     * UIDAI SLA 006 (Resource Replacement Overlap) for one activity. For each replacement — an outgoing
+     * assignment that names an incoming resource in {@code replacedByResId} — it computes the overlap
+     * window {@code [incoming joining date, outgoing last working date]} and counts the <b>working
+     * days</b> in it against the UIDAI working-day/holiday calendar (weekends and public holidays
+     * excluded), not raw calendar days. If the incoming resource joins after the outgoing resource's
+     * last day there is no overlap, so working days = 0. Returns only the SLA result string — never a
+     * severity level.
+     */
+    @Transactional(readOnly = true)
+    public ActivityReplacementOverlapReport activityReplacementOverlaps(String projectId, String activityId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
+        }
+        LocalDate aStart = activity.startDate();
+        LocalDate aEnd = activity.endDate();
+        String activityName = activity.activityName() != null ? activity.activityName() : activityId;
+
+        List<ActivityReplacementOverlapReport.ReplacementOverlap> overlaps = new ArrayList<>();
+        for (ProjectResource outgoing : projectResourceRepository.findByProjectId(projectId)) {
+            String incomingResId = outgoing.getReplacedByResId();
+            if (incomingResId == null || incomingResId.isBlank()) {
+                continue;
+            }
+            String outgoingResId = outgoing.getResource().getResId();
+            // Scope to this activity: the outgoing resource must have worked on it.
+            if (!attendanceRepository.existsByResIdAndActivityIdAndDateBetween(
+                    outgoingResId, activityId, aStart, aEnd)) {
+                continue;
+            }
+            ProjectResource incoming = incomingAssignment(incomingResId, projectId, outgoing.getRole());
+            LocalDate overlapStart = incoming != null ? incoming.getAssignmentStartDate() : null; // joining
+            LocalDate overlapEnd = outgoing.getAssignmentEndDate();                                // last day
+
+            int workingDays = (overlapStart != null && overlapEnd != null && !overlapStart.isAfter(overlapEnd))
+                    ? workingDaysBetween(overlapStart, overlapEnd)
+                    : 0;
+            String result = workingDays >= 20
+                    ? "Overlap >= 20 Working Days"
+                    : "Overlap < 20 Working Days";
+
+            overlaps.add(new ActivityReplacementOverlapReport.ReplacementOverlap(
+                    "SLA006",
+                    outgoingResId, outgoing.getResource().getName(), outgoing.getRole(), overlapEnd,
+                    incomingResId,
+                    incoming != null ? incoming.getResource().getName() : null,
+                    incoming != null ? incoming.getRole() : outgoing.getRole(),
+                    overlapStart, overlapStart, overlapEnd, workingDays, result));
+        }
+        return new ActivityReplacementOverlapReport(
+                projectId, activityId, activityName, overlaps.size(), overlaps);
+    }
+
+    /** The incoming resource's assignment for the replaced designation (earliest matching, else latest). */
+    private ProjectResource incomingAssignment(String incomingResId, String projectId, String role) {
+        List<ProjectResource> assignments = projectResourceRepository
+                .findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc(incomingResId, projectId);
+        return assignments.stream()
+                .filter(a -> role == null || role.equals(a.getRole()))
+                .filter(a -> a.getAssignmentStartDate() != null)
+                .min(Comparator.comparing(ProjectResource::getAssignmentStartDate))
+                .orElseGet(() -> assignments.stream().findFirst().orElse(null));
+    }
+
+    /** Working days (weekdays that are not public holidays) in {@code [start, end]}, UIDAI calendar. */
+    private int workingDaysBetween(LocalDate start, LocalDate end) {
+        Set<LocalDate> holidays = holidaysBetween(start, end);
+        int count = 0;
+        for (LocalDate d = start; !d.isAfter(end); d = d.plusDays(1)) {
+            if (!isWeekend(d) && !holidays.contains(d)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
