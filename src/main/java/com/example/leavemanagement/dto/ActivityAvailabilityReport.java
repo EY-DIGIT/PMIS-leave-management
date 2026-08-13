@@ -29,17 +29,18 @@ public record ActivityAvailabilityReport(
         List<MonthlyAvailability> months) {
 
     /**
-     * One calendar month's availability aggregated over every resource on the activity.
+     * One monthly cycle's availability aggregated over every resource on the activity. Cycles are
+     * aligned to the activity start day (e.g. 07-Jan → 06-Feb, 07-Feb → 06-Mar), not calendar months.
      *
-     * @param year              the month's year
-     * @param month             the month (1-12)
-     * @param period            human-readable month label (e.g. "February 2026")
-     * @param fromDate          first captured day in the month (clamped to the activity window)
-     * @param toDate            last captured day in the month (clamped to the uploaded window)
-     * @param resourceCount     distinct resources that logged attendance in the month
+     * @param year              the cycle start year
+     * @param month             the cycle start month (1-12)
+     * @param period            cycle range label (e.g. "07-Jan-2026 to 06-Feb-2026")
+     * @param fromDate          cycle start (activity-start-aligned)
+     * @param toDate            cycle end (day before the next cycle start, clamped to activity end)
+     * @param resourceCount     distinct resources that logged attendance in the cycle
      * @param totalBusinessDays total business days attended across all resources (Present + Half-Day + WFH)
      * @param totalPresentDays  total weighted present days across all resources (Present + 0.5 × Half-Day)
-     * @param totalWorkingHours total working hours logged across all resources in the month
+     * @param totalWorkingHours total working hours logged across all resources in the cycle
      */
     public record MonthlyAvailability(
             int year,

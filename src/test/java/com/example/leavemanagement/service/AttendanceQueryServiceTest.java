@@ -915,10 +915,11 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void activityAvailabilityReportAggregatesPresentDaysAndHoursPerMonth() {
-        // Activity A1 (07-Jan..06-Apr). Two months uploaded (reportEnd = 28-Feb). Two resources.
-        // Jan: Kuldeep 16 days @ 9h + Sanju 12 days @ 8h → 28 business days, 240h, 2 resources.
-        // Feb: only Kuldeep 10 days @ 8h → 10 business days, 80h, 1 resource.
+    void activityAvailabilityReportAggregatesPerActivityAlignedCycle() {
+        // Activity A1 (07-Jan..06-Apr) → cycles 07-Jan..06-Feb, 07-Feb..06-Mar, 07-Mar..06-Apr.
+        // Uploaded up to 16-Feb, so only the first two cycles appear.
+        // Cycle 1 (07-Jan..06-Feb): Kuldeep 16 @ 9h + Sanju 12 @ 8h → 28 days, 240h, 2 resources.
+        // Cycle 2 (07-Feb..06-Mar): Kuldeep 10 @ 8h → 10 days, 80h, 1 resource.
         MasterResource kuldeep = new MasterResource("E1");
         kuldeep.setName("Kuldeep");
         setId(kuldeep, 1L);
@@ -929,7 +930,7 @@ class AttendanceQueryServiceTest {
         when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
                 new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6), List.of())));
         when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("A1"), any(), any()))
-                .thenReturn(Optional.of(LocalDate.of(2026, 2, 28)));
+                .thenReturn(Optional.of(LocalDate.of(2026, 2, 16)));
 
         List<Attendance> all = new java.util.ArrayList<>();
         for (int i = 0; i < 16; i++) {
@@ -942,8 +943,8 @@ class AttendanceQueryServiceTest {
             a.setWorkingHours(8.0);
             all.add(a);
         }
-        for (int i = 0; i < 10; i++) {
-            Attendance a = new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 2, 2).plusDays(i), AttendanceStatus.P);
+        for (int i = 0; i < 10; i++) { // 07-Feb..16-Feb → cycle 2
+            Attendance a = new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 2, 7).plusDays(i), AttendanceStatus.P);
             a.setWorkingHours(8.0);
             all.add(a);
         }
@@ -960,20 +961,21 @@ class AttendanceQueryServiceTest {
 
         assertThat(report.months()).hasSize(2);
 
-        ActivityAvailabilityReport.MonthlyAvailability jan = report.months().get(0);
-        assertThat(jan.period()).isEqualTo("January 2026");
-        assertThat(jan.fromDate()).isEqualTo(LocalDate.of(2026, 1, 7));
-        assertThat(jan.toDate()).isEqualTo(LocalDate.of(2026, 1, 31));
-        assertThat(jan.resourceCount()).isEqualTo(2);
-        assertThat(jan.totalBusinessDays()).isEqualTo(28);
-        assertThat(jan.totalWorkingHours()).isEqualTo(240.0); // 16*9 + 12*8
+        ActivityAvailabilityReport.MonthlyAvailability c1 = report.months().get(0);
+        assertThat(c1.period()).isEqualTo("07-Jan-2026 to 06-Feb-2026");
+        assertThat(c1.fromDate()).isEqualTo(LocalDate.of(2026, 1, 7));
+        assertThat(c1.toDate()).isEqualTo(LocalDate.of(2026, 2, 6));
+        assertThat(c1.resourceCount()).isEqualTo(2);
+        assertThat(c1.totalBusinessDays()).isEqualTo(28);
+        assertThat(c1.totalWorkingHours()).isEqualTo(240.0); // 16*9 + 12*8
 
-        ActivityAvailabilityReport.MonthlyAvailability feb = report.months().get(1);
-        assertThat(feb.period()).isEqualTo("February 2026");
-        assertThat(feb.toDate()).isEqualTo(LocalDate.of(2026, 2, 28));
-        assertThat(feb.resourceCount()).isEqualTo(1);
-        assertThat(feb.totalBusinessDays()).isEqualTo(10);
-        assertThat(feb.totalWorkingHours()).isEqualTo(80.0);
+        ActivityAvailabilityReport.MonthlyAvailability c2 = report.months().get(1);
+        assertThat(c2.period()).isEqualTo("07-Feb-2026 to 06-Mar-2026");
+        assertThat(c2.fromDate()).isEqualTo(LocalDate.of(2026, 2, 7));
+        assertThat(c2.toDate()).isEqualTo(LocalDate.of(2026, 3, 6));
+        assertThat(c2.resourceCount()).isEqualTo(1);
+        assertThat(c2.totalBusinessDays()).isEqualTo(10);
+        assertThat(c2.totalWorkingHours()).isEqualTo(80.0);
     }
 
     @Test

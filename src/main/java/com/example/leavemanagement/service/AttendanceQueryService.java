@@ -951,27 +951,29 @@ public class AttendanceQueryService {
         LocalDate aEnd = activity.endDate();
         String activityName = activity.activityName() != null ? activity.activityName() : activityId;
         String periodLabel = aStart.format(PERIOD_DATE_FMT) + " to " + aEnd.format(PERIOD_DATE_FMT);
-        // Bound to what's uploaded so the breakup only shows captured months.
-        LocalDate reportEnd = attendanceRepository
-                .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aStart);
+        // Monthly cycles are aligned to the activity start day (e.g. 07-Jan → 06-Feb, 07-Feb → 06-Mar,
+        // …), not calendar months. Only cycles that have begun uploading appear, so the breakup grows
+        // with each upload.
+        LocalDate maxUploaded = attendanceRepository
+                .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(null);
 
         List<ActivityAvailabilityReport.MonthlyAvailability> months = new ArrayList<>();
-        LocalDate cursor = aStart;
-        while (!cursor.isAfter(reportEnd)) {
-            LocalDate monthEnd = cursor.withDayOfMonth(cursor.lengthOfMonth());
-            LocalDate segEnd = monthEnd.isBefore(reportEnd) ? monthEnd : reportEnd;
+        for (LocalDate[] cycle : cyclesUpTo(aStart, aEnd, maxUploaded)) {
+            LocalDate cStart = cycle[0];
+            LocalDate cEnd = cycle[1];
             List<Attendance> rows = attendanceRepository
-                    .findByActivityIdAndAttendanceDateBetween(activityId, cursor, segEnd);
-            if (!rows.isEmpty()) {
-                AvailabilityCounts c = availabilityOf(rows);
-                int resourceCount = (int) rows.stream()
-                        .map(a -> a.getResource().getId()).distinct().count();
-                months.add(new ActivityAvailabilityReport.MonthlyAvailability(
-                        cursor.getYear(), cursor.getMonthValue(), cursor.format(MONTH_YEAR),
-                        cursor, segEnd, resourceCount,
-                        c.businessDays(), c.presentDays(), c.totalHours()));
+                    .findByActivityIdAndAttendanceDateBetween(activityId, cStart, cEnd);
+            if (rows.isEmpty()) {
+                continue;
             }
-            cursor = monthEnd.plusDays(1);
+            AvailabilityCounts c = availabilityOf(rows);
+            int resourceCount = (int) rows.stream()
+                    .map(a -> a.getResource().getId()).distinct().count();
+            months.add(new ActivityAvailabilityReport.MonthlyAvailability(
+                    cStart.getYear(), cStart.getMonthValue(),
+                    cStart.format(PERIOD_DATE_FMT) + " to " + cEnd.format(PERIOD_DATE_FMT),
+                    cStart, cEnd, resourceCount,
+                    c.businessDays(), c.presentDays(), c.totalHours()));
         }
         return new ActivityAvailabilityReport(
                 projectId, activityId, activityName, periodLabel, aStart, aEnd, months.size(), months);
