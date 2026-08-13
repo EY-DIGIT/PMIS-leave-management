@@ -132,19 +132,16 @@ public class AttendanceController {
     }
 
     @Operation(
-            summary = "Activity resource availability with monthly breakup (UIDAI SLA 007)",
-            description = "Filtered by projectId + activityId. For each resource with attendance under the "
-                    + "activity, returns a calendar-month breakdown of business days attended and total "
-                    + "working hours logged, each month carrying its own SLA 007 severity, plus cumulative "
-                    + "totals. Only months with uploaded attendance appear, so the breakup grows month-by-"
-                    + "month with each upload. Pass resourceId to scope to a single resource.")
+            summary = "Activity monthly availability, aggregated across resources (UIDAI SLA 007)",
+            description = "Filtered by projectId + activityId. Returns a calendar-month breakdown where each "
+                    + "month aggregates across all resources: total business days attended and total working "
+                    + "hours logged that month, plus how many resources contributed. Only months with "
+                    + "uploaded attendance appear, so the breakup grows month-by-month with each upload.")
     @GetMapping("/report/availability/activity")
     public ActivityAvailabilityReport activityAvailabilityReport(
             @Parameter(description = "Project id") @RequestParam("projectId") String projectId,
-            @Parameter(description = "Activity id from PMIS") @RequestParam("activityId") String activityId,
-            @Parameter(description = "res_id (Attendance ID) — optional, to scope to one resource")
-                    @RequestParam(required = false) String resourceId) {
-        return attendanceQueryService.activityAvailabilityReport(projectId, activityId, resourceId);
+            @Parameter(description = "Activity id from PMIS") @RequestParam("activityId") String activityId) {
+        return attendanceQueryService.activityAvailabilityReport(projectId, activityId);
     }
 
     /**

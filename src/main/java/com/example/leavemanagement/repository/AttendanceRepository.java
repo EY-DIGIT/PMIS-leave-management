@@ -26,6 +26,13 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
     List<Attendance> findByProjectIdAndAttendanceDateBetween(String projectId, LocalDate start, LocalDate end);
 
+    /** All attendance rows for an activity in a date range (across every resource) — for aggregates. */
+    @Query("SELECT a FROM Attendance a WHERE a.activityId = :activityId AND a.attendanceDate BETWEEN :start AND :end")
+    List<Attendance> findByActivityIdAndAttendanceDateBetween(
+            @Param("activityId") String activityId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
     List<Attendance> findByAttendanceDateBetween(LocalDate start, LocalDate end);
 
     /** Clears a resource's rows in a date range before a re-upload replaces them. */

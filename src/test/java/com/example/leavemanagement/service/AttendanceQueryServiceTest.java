@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -916,66 +915,65 @@ class AttendanceQueryServiceTest {
     }
 
     @Test
-    void activityAvailabilityReportGivesMonthlyBreakupWithHoursAndSeverity() {
-        // Activity A1 (07-Jan..06-Apr). Two months uploaded (reportEnd = 28-Feb).
-        // Jan: 16 days @ 9h = 144h → severity 0. Feb: 10 days @ 8h = 80h → severity 4.
-        MasterResource resource = new MasterResource("E1");
-        resource.setName("Kuldeep");
-        setId(resource, 1L);
-        ProjectResource assignment = new ProjectResource(resource, "P1", "Program Manager", LocalDate.of(2020, 1, 1));
-        when(projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue("E1", "P1"))
-                .thenReturn(Optional.of(assignment));
+    void activityAvailabilityReportAggregatesPresentDaysAndHoursPerMonth() {
+        // Activity A1 (07-Jan..06-Apr). Two months uploaded (reportEnd = 28-Feb). Two resources.
+        // Jan: Kuldeep 16 days @ 9h + Sanju 12 days @ 8h → 28 business days, 240h, 2 resources.
+        // Feb: only Kuldeep 10 days @ 8h → 10 business days, 80h, 1 resource.
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource sanju = new MasterResource("E2");
+        sanju.setName("Sanju");
+        setId(sanju, 2L);
+
         when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
                 new ActivityDetailsResponse("D9", LocalDate.of(2026, 1, 7), LocalDate.of(2026, 4, 6), List.of())));
         when(attendanceRepository.findMaxDateByActivityIdAndDateBetween(eq("A1"), any(), any()))
                 .thenReturn(Optional.of(LocalDate.of(2026, 2, 28)));
-        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
-                .thenReturn(List.of(resource));
 
         List<Attendance> all = new java.util.ArrayList<>();
         for (int i = 0; i < 16; i++) {
-            Attendance a = new Attendance(resource, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 7).plusDays(i), AttendanceStatus.P);
+            Attendance a = new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 7).plusDays(i), AttendanceStatus.P);
             a.setWorkingHours(9.0);
             all.add(a);
         }
-        for (int i = 0; i < 10; i++) {
-            Attendance a = new Attendance(resource, "P1", null, "M1", "A1", LocalDate.of(2026, 2, 2).plusDays(i), AttendanceStatus.P);
+        for (int i = 0; i < 12; i++) {
+            Attendance a = new Attendance(sanju, "P1", null, "M1", "A1", LocalDate.of(2026, 1, 7).plusDays(i), AttendanceStatus.P);
             a.setWorkingHours(8.0);
             all.add(a);
         }
-        // doAnswer(...).when(...) so this overrides the @BeforeEach lenient delegation stub.
-        doAnswer(inv -> {
-            LocalDate s = inv.getArgument(2);
-            LocalDate e = inv.getArgument(3);
-            return all.stream()
-                    .filter(a -> !a.getAttendanceDate().isBefore(s) && !a.getAttendanceDate().isAfter(e))
-                    .toList();
-        }).when(attendanceRepository)
-                .findByResourceIdAndActivityIdAndAttendanceDateBetween(eq(1L), eq("A1"), any(), any());
+        for (int i = 0; i < 10; i++) {
+            Attendance a = new Attendance(kuldeep, "P1", null, "M1", "A1", LocalDate.of(2026, 2, 2).plusDays(i), AttendanceStatus.P);
+            a.setWorkingHours(8.0);
+            all.add(a);
+        }
+        when(attendanceRepository.findByActivityIdAndAttendanceDateBetween(eq("A1"), any(), any()))
+                .thenAnswer(inv -> {
+                    LocalDate s = inv.getArgument(1);
+                    LocalDate e = inv.getArgument(2);
+                    return all.stream()
+                            .filter(a -> !a.getAttendanceDate().isBefore(s) && !a.getAttendanceDate().isAfter(e))
+                            .toList();
+                });
 
-        ActivityAvailabilityReport report = service.activityAvailabilityReport("P1", "A1", null);
+        ActivityAvailabilityReport report = service.activityAvailabilityReport("P1", "A1");
 
-        assertThat(report.resources()).hasSize(1);
-        ActivityAvailabilityReport.ResourceAvailability r = report.resources().get(0);
-        assertThat(r.designation()).isEqualTo("Program Manager");
-        assertThat(r.totalBusinessDays()).isEqualTo(26);
-        assertThat(r.totalWorkingHours()).isEqualTo(224.0);
-        assertThat(r.monthlyBreakup()).hasSize(2);
+        assertThat(report.months()).hasSize(2);
 
-        ActivityAvailabilityReport.MonthlyAvailability jan = r.monthlyBreakup().get(0);
+        ActivityAvailabilityReport.MonthlyAvailability jan = report.months().get(0);
         assertThat(jan.period()).isEqualTo("January 2026");
         assertThat(jan.fromDate()).isEqualTo(LocalDate.of(2026, 1, 7));
         assertThat(jan.toDate()).isEqualTo(LocalDate.of(2026, 1, 31));
-        assertThat(jan.businessDays()).isEqualTo(16);
-        assertThat(jan.totalWorkingHours()).isEqualTo(144.0);
-        assertThat(jan.slaSeverity()).isZero();
+        assertThat(jan.resourceCount()).isEqualTo(2);
+        assertThat(jan.totalBusinessDays()).isEqualTo(28);
+        assertThat(jan.totalWorkingHours()).isEqualTo(240.0); // 16*9 + 12*8
 
-        ActivityAvailabilityReport.MonthlyAvailability feb = r.monthlyBreakup().get(1);
+        ActivityAvailabilityReport.MonthlyAvailability feb = report.months().get(1);
         assertThat(feb.period()).isEqualTo("February 2026");
         assertThat(feb.toDate()).isEqualTo(LocalDate.of(2026, 2, 28));
-        assertThat(feb.businessDays()).isEqualTo(10);
+        assertThat(feb.resourceCount()).isEqualTo(1);
+        assertThat(feb.totalBusinessDays()).isEqualTo(10);
         assertThat(feb.totalWorkingHours()).isEqualTo(80.0);
-        assertThat(feb.slaSeverity()).isEqualTo(4);
     }
 
     @Test

@@ -934,15 +934,14 @@ public class AttendanceQueryService {
     }
 
     /**
-     * Activity-scoped monthly availability report for UIDAI SLA 007. Filtered by project + activity,
-     * it returns — per resource with attendance under the activity — a calendar-month breakdown of
-     * business days and working hours, each month carrying its own SLA severity. Pass {@code
-     * resourceId} to scope to a single resource. Only months with uploaded attendance appear, so the
+     * Activity-scoped monthly availability report (UIDAI SLA 007 input). Filtered by project +
+     * activity, it returns a calendar-month breakdown where each month <em>aggregates across all
+     * resources</em>: total business days attended and total working hours logged that month, plus the
+     * number of resources that contributed. Only months with uploaded attendance appear, so the
      * breakup grows month-by-month with each upload.
      */
     @Transactional(readOnly = true)
-    public ActivityAvailabilityReport activityAvailabilityReport(
-            String projectId, String activityId, String resourceId) {
+    public ActivityAvailabilityReport activityAvailabilityReport(String projectId, String activityId) {
         ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
                 .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
         if (activity.startDate() == null || activity.endDate() == null) {
@@ -956,55 +955,26 @@ public class AttendanceQueryService {
         LocalDate reportEnd = attendanceRepository
                 .findMaxDateByActivityIdAndDateBetween(activityId, aStart, aEnd).orElse(aStart);
 
-        boolean hasResourceFilter = resourceId != null && !resourceId.isBlank();
-        List<ActivityAvailabilityReport.ResourceAvailability> rows = attendanceRepository
-                .findDistinctResourcesByActivityIdAndDateBetween(activityId, aStart, reportEnd).stream()
-                .filter(resource -> !hasResourceFilter || resourceId.equals(resource.getResId()))
-                .map(resource -> buildActivityAvailability(resource, projectId, activityId, aStart, aEnd, reportEnd))
-                .toList();
-        return new ActivityAvailabilityReport(
-                projectId, activityId, activityName, periodLabel, aStart, aEnd, rows.size(), rows);
-    }
-
-    private ActivityAvailabilityReport.ResourceAvailability buildActivityAvailability(
-            MasterResource resource, String projectId, String activityId,
-            LocalDate aStart, LocalDate aEnd, LocalDate reportEnd) {
-        ProjectResource assignment = resolveAssignmentForProject(resource.getResId(), projectId);
-        LocalDate joiningDate = assignment != null ? assignment.getAssignmentStartDate() : null;
-        LocalDate lastWorkingDate = assignment != null ? assignment.getAssignmentEndDate() : null;
-        LocalDate effStart = (joiningDate != null && joiningDate.isAfter(aStart)) ? joiningDate : aStart;
-        LocalDate windowEnd = (lastWorkingDate != null && lastWorkingDate.isBefore(aEnd)) ? lastWorkingDate : aEnd;
-        LocalDate effEnd = windowEnd.isBefore(reportEnd) ? windowEnd : reportEnd;
-
-        List<ActivityAvailabilityReport.MonthlyAvailability> monthly = new ArrayList<>();
-        int totalBusinessDays = 0;
-        double totalPresentDays = 0.0;
-        double totalHours = 0.0;
-
-        LocalDate cursor = effStart;
-        while (!cursor.isAfter(effEnd)) {
+        List<ActivityAvailabilityReport.MonthlyAvailability> months = new ArrayList<>();
+        LocalDate cursor = aStart;
+        while (!cursor.isAfter(reportEnd)) {
             LocalDate monthEnd = cursor.withDayOfMonth(cursor.lengthOfMonth());
-            LocalDate segEnd = monthEnd.isBefore(effEnd) ? monthEnd : effEnd;
+            LocalDate segEnd = monthEnd.isBefore(reportEnd) ? monthEnd : reportEnd;
             List<Attendance> rows = attendanceRepository
-                    .findByResourceIdAndActivityIdAndAttendanceDateBetween(
-                            resource.getId(), activityId, cursor, segEnd);
+                    .findByActivityIdAndAttendanceDateBetween(activityId, cursor, segEnd);
             if (!rows.isEmpty()) {
                 AvailabilityCounts c = availabilityOf(rows);
-                monthly.add(new ActivityAvailabilityReport.MonthlyAvailability(
+                int resourceCount = (int) rows.stream()
+                        .map(a -> a.getResource().getId()).distinct().count();
+                months.add(new ActivityAvailabilityReport.MonthlyAvailability(
                         cursor.getYear(), cursor.getMonthValue(), cursor.format(MONTH_YEAR),
-                        cursor, segEnd, c.businessDays(), c.presentDays(), c.totalHours(),
-                        slaSeverity(c.businessDays(), c.totalHours())));
-                totalBusinessDays += c.businessDays();
-                totalPresentDays += c.presentDays();
-                totalHours += c.totalHours();
+                        cursor, segEnd, resourceCount,
+                        c.businessDays(), c.presentDays(), c.totalHours()));
             }
             cursor = monthEnd.plusDays(1);
         }
-
-        return new ActivityAvailabilityReport.ResourceAvailability(
-                resource.getResId(), resource.getName(),
-                assignment != null ? assignment.getRole() : null,
-                totalBusinessDays, round2(totalPresentDays), round2(totalHours), monthly);
+        return new ActivityAvailabilityReport(
+                projectId, activityId, activityName, periodLabel, aStart, aEnd, months.size(), months);
     }
 
     /** Present/half/WFH day counts and total logged hours for a set of attendance rows. */
