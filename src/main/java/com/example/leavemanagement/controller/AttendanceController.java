@@ -3,6 +3,7 @@ package com.example.leavemanagement.controller;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.ActivityHolidayReport;
+import com.example.leavemanagement.dto.ActivityReplacementOnboardingReport;
 import com.example.leavemanagement.dto.ActivityReplacementOverlapReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
@@ -241,6 +242,22 @@ public class AttendanceController {
             @Parameter(description = "Project id") @RequestParam String projectId,
             @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
         return attendanceQueryService.activityReplacementOverlaps(projectId, activityId);
+    }
+
+    @Operation(
+            summary = "Replacement onboarding delay (UIDAI SLA 009)",
+            description = "For each resource replacement on the activity, computes the onboarding delay as "
+                    + "(actual mobilization date − date of notification) in CALENDAR days (the SLA says "
+                    + "'21 Days', not working days). Returns only the SLA009 result "
+                    + "('Within 21 Days' for <= 21, 'More than 21 Days' for > 21, or 'Manual' when the "
+                    + "notification date was not captured) — no severity level. The notification date comes "
+                    + "from column J (Replacement Notification Date) of the resource master; mobilization is "
+                    + "the incoming resource's joining date.")
+    @GetMapping("/report/activity/replacement-onboarding")
+    public ActivityReplacementOnboardingReport activityReplacementOnboarding(
+            @Parameter(description = "Project id") @RequestParam String projectId,
+            @Parameter(description = "Activity id from PMIS") @RequestParam String activityId) {
+        return attendanceQueryService.activityReplacementOnboarding(projectId, activityId);
     }
 
     /**

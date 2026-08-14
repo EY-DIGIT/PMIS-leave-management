@@ -59,6 +59,10 @@ public class ProjectResource {
     @Column(name = "replaced_by_res_id", length = 50)
     private String replacedByResId;
 
+    /** Date the replacement was notified — the "Date of notification" input for UIDAI SLA 009. */
+    @Column(name = "replacement_notified_date")
+    private LocalDate replacementNotifiedDate;
+
     @Column(name = "role", length = 200)
     private String role;
 

@@ -19,6 +19,9 @@ import java.time.LocalDate;
  * @param active             derived: true when lastDayOfWorking is blank
  * @param replacedByResId    optional Attendance ID of the resource taking over this designation
  *                           after this resource's Last Day of Working
+ * @param replacementNotifiedDate optional date the replacement was notified — the "Date of
+ *                                notification" input for UIDAI SLA 009 (onboarding delay); blank ⇒
+ *                                SLA 009 result is "Manual"
  */
 public record ResourceRow(
         String resId,
@@ -30,4 +33,5 @@ public record ResourceRow(
         String category,
         String categoryDetails,
         boolean active,
-        String replacedByResId) {}
+        String replacedByResId,
+        LocalDate replacementNotifiedDate) {}

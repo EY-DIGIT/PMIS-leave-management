@@ -22,6 +22,7 @@ import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.ActivityResourceConfig;
 import com.example.leavemanagement.dto.ActivityAvailabilityReport;
+import com.example.leavemanagement.dto.ActivityReplacementOnboardingReport;
 import com.example.leavemanagement.dto.ActivityReplacementOverlapReport;
 import com.example.leavemanagement.dto.MonthlyResourceCost;
 import com.example.leavemanagement.dto.ResourceAvailabilityReport;
@@ -1016,6 +1017,79 @@ class AttendanceQueryServiceTest {
         assertThat(o.overlapEndDate()).isEqualTo(LocalDate.of(2026, 9, 5));
         assertThat(o.overlapWorkingDays()).isEqualTo(16);
         assertThat(o.slaResult()).isEqualTo("Overlap < 20 Working Days");
+    }
+
+    @Test
+    void replacementOnboardingComputesCalendarDaysAndSla009Result() {
+        // SLA009: notification 01-Aug-2026, mobilization (incoming joining) 25-Aug-2026 → 24 days
+        // (calendar) → "More than 21 Days".
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource harsh = new MasterResource("E2");
+        harsh.setName("Harsh");
+        setId(harsh, 2L);
+
+        ProjectResource outgoing = new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 1));
+        outgoing.setActive(false);
+        outgoing.setAssignmentEndDate(LocalDate.of(2026, 8, 30));
+        outgoing.setReplacedByResId("E2");
+        outgoing.setReplacementNotifiedDate(LocalDate.of(2026, 8, 1));
+        ProjectResource incoming = new ProjectResource(harsh, "P1", "Program Manager", LocalDate.of(2026, 8, 25));
+
+        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 30), List.of())));
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(outgoing));
+        when(attendanceRepository.existsByResIdAndActivityIdAndDateBetween(eq("E1"), eq("A1"), any(), any()))
+                .thenReturn(true);
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E2", "P1"))
+                .thenReturn(List.of(incoming));
+
+        ActivityReplacementOnboardingReport.ReplacementOnboarding o =
+                service.activityReplacementOnboarding("P1", "A1").replacements().get(0);
+        assertThat(o.slaNumber()).isEqualTo("SLA009");
+        assertThat(o.notificationDate()).isEqualTo(LocalDate.of(2026, 8, 1));
+        assertThat(o.mobilizationDate()).isEqualTo(LocalDate.of(2026, 8, 25));
+        assertThat(o.onboardingDays()).isEqualTo(24);
+        assertThat(o.slaResult()).isEqualTo("More than 21 Days");
+    }
+
+    @Test
+    void replacementOnboardingTreatsExactly21DaysAsWithinAndMissingNotificationAsManual() {
+        MasterResource kuldeep = new MasterResource("E1");
+        kuldeep.setName("Kuldeep");
+        setId(kuldeep, 1L);
+        MasterResource harsh = new MasterResource("E2");
+        harsh.setName("Harsh");
+        setId(harsh, 2L);
+        ProjectResource incoming = new ProjectResource(harsh, "P1", "Program Manager", LocalDate.of(2026, 8, 22));
+
+        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
+                new ActivityDetailsResponse("D9", LocalDate.of(2026, 8, 1), LocalDate.of(2026, 9, 30), List.of())));
+        when(attendanceRepository.existsByResIdAndActivityIdAndDateBetween(eq("E1"), eq("A1"), any(), any()))
+                .thenReturn(true);
+        when(projectResourceRepository.findByResource_ResIdAndProjectIdOrderByAssignmentStartDateDesc("E2", "P1"))
+                .thenReturn(List.of(incoming));
+
+        // Case A — exactly 21 days → "Within 21 Days".
+        ProjectResource within = new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 1));
+        within.setReplacedByResId("E2");
+        within.setReplacementNotifiedDate(LocalDate.of(2026, 8, 1)); // → 22-Aug is 21 days
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(within));
+        ActivityReplacementOnboardingReport.ReplacementOnboarding a =
+                service.activityReplacementOnboarding("P1", "A1").replacements().get(0);
+        assertThat(a.onboardingDays()).isEqualTo(21);
+        assertThat(a.slaResult()).isEqualTo("Within 21 Days");
+
+        // Case B — no notification date → "Manual".
+        ProjectResource manual = new ProjectResource(kuldeep, "P1", "Program Manager", LocalDate.of(2026, 1, 1));
+        manual.setReplacedByResId("E2");
+        manual.setReplacementNotifiedDate(null);
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of(manual));
+        ActivityReplacementOnboardingReport.ReplacementOnboarding b =
+                service.activityReplacementOnboarding("P1", "A1").replacements().get(0);
+        assertThat(b.onboardingDays()).isNull();
+        assertThat(b.slaResult()).isEqualTo("Manual");
     }
 
     @Test

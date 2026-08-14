@@ -212,6 +212,7 @@ public class MasterResourceService {
             assignment.setOrganisationId(organisationId);
             assignment.setRateCardByYear(fetchRateCard(row.role(), projectId, organisationId));
             assignment.setReplacedByResId(row.replacedByResId());
+            assignment.setReplacementNotifiedDate(row.replacementNotifiedDate());
             projectResourceRepository.save(assignment);
             return;
         }
@@ -222,6 +223,7 @@ public class MasterResourceService {
             assignment.setActive(false);
             assignment.setAssignmentEndDate(row.lastDayOfWorking());
             assignment.setReplacedByResId(row.replacedByResId());
+            assignment.setReplacementNotifiedDate(row.replacementNotifiedDate());
             projectResourceRepository.save(assignment);
             return;
         }

@@ -110,8 +110,9 @@ public class TemplateService {
      * <p>Layout matches {@code ResourceParser}:
      * <ul>
      *   <li>Row 1 — column headers (1 header row; parser skips HEADER_ROWS = 1)
-     *   <li>Cols A–H: Attendance ID | Employee Name | Role as per Contract | Location |
-     *       Date of Joining | Last Day of Working | Category (RFP/CCN/ASG) | CCN/ASG Details
+     *   <li>Cols A–J: Attendance ID | Employee Name | Role as per Contract | Location |
+     *       Date of Joining | Last Day of Working | Category (RFP/CCN/ASG) | CCN/ASG Details |
+     *       Replaced By Resource ID | Replacement Notification Date
      * </ul>
      * Rate card columns (Year-1..Year-7) are no longer in the resource Excel — rates are
      * resolved from the designation rate master by role at upload time.
@@ -134,6 +135,8 @@ public class TemplateService {
             cell(labels, 5, "Last Day of Working",     hdrStyle);
             cell(labels, 6, "Category (RFP/CCN/ASG)", hdrStyle);
             cell(labels, 7, "CCN/ASG Details",         hdrStyle);
+            cell(labels, 8, "Replaced By Resource ID", hdrStyle);
+            cell(labels, 9, "Replacement Notification Date", hdrStyle);
 
             // Row 1 — sample-format hint row
             Row hint = sheet.createRow(1);
@@ -145,13 +148,15 @@ public class TemplateService {
             cell(hint, 5, "yyyy-MM-dd or leave blank",  noteStyle);
             cell(hint, 6, "RFP / CCN / ASG",            noteStyle);
             cell(hint, 7, "e.g. CCN001 or NA",          noteStyle);
+            cell(hint, 8, "incoming res_id or blank",   noteStyle);
+            cell(hint, 9, "yyyy-MM-dd (SLA009) or blank", noteStyle);
 
             // Empty data rows
             for (int r = 2; r < 2 + TEMPLATE_EMPLOYEE_SLOTS; r++) {
                 sheet.createRow(r);
             }
 
-            int[] widths = {4500, 8000, 9000, 5000, 5500, 5500, 5500, 5000};
+            int[] widths = {4500, 8000, 9000, 5000, 5500, 5500, 5500, 5000, 6000, 7000};
             for (int i = 0; i < widths.length; i++) {
                 sheet.setColumnWidth(i, widths[i]);
             }

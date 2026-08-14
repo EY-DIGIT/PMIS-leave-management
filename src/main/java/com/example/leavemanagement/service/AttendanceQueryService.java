@@ -5,6 +5,7 @@ import com.example.leavemanagement.client.LeavePolicyClient;
 import com.example.leavemanagement.dto.ActivityAttendanceReportResult;
 import com.example.leavemanagement.dto.ActivityAvailabilityReport;
 import com.example.leavemanagement.dto.ActivityHolidayReport;
+import com.example.leavemanagement.dto.ActivityReplacementOnboardingReport;
 import com.example.leavemanagement.dto.ActivityReplacementOverlapReport;
 import com.example.leavemanagement.dto.ActivityReplacementReport;
 import com.example.leavemanagement.dto.ActivityResourceDetailsReport;
@@ -655,6 +656,64 @@ public class AttendanceQueryService {
         }
         return new ActivityReplacementOverlapReport(
                 projectId, activityId, activityName, overlaps.size(), overlaps);
+    }
+
+    /**
+     * UIDAI SLA 009 (Delay in Onboarding of Replacement Resource) for one activity. For each
+     * replacement it computes the onboarding delay {@code mobilization − notification} in <b>calendar
+     * days</b> (the SLA says "21 Days", not working days) and returns the result: "Within 21 Days"
+     * ({@code <= 21}), "More than 21 Days" ({@code > 21}), or "Manual" when the notification date was
+     * not captured. Never a severity level.
+     */
+    @Transactional(readOnly = true)
+    public ActivityReplacementOnboardingReport activityReplacementOnboarding(String projectId, String activityId) {
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
+        }
+        LocalDate aStart = activity.startDate();
+        LocalDate aEnd = activity.endDate();
+        String activityName = activity.activityName() != null ? activity.activityName() : activityId;
+
+        List<ActivityReplacementOnboardingReport.ReplacementOnboarding> rows = new ArrayList<>();
+        for (ProjectResource outgoing : projectResourceRepository.findByProjectId(projectId)) {
+            String incomingResId = outgoing.getReplacedByResId();
+            if (incomingResId == null || incomingResId.isBlank()) {
+                continue;
+            }
+            String outgoingResId = outgoing.getResource().getResId();
+            if (!attendanceRepository.existsByResIdAndActivityIdAndDateBetween(
+                    outgoingResId, activityId, aStart, aEnd)) {
+                continue;
+            }
+            ProjectResource incoming = incomingAssignment(incomingResId, projectId, outgoing.getRole());
+            LocalDate notificationDate = outgoing.getReplacementNotifiedDate();
+            LocalDate mobilizationDate = incoming != null ? incoming.getAssignmentStartDate() : null;
+
+            Integer onboardingDays;
+            String result;
+            if (notificationDate == null) {
+                onboardingDays = null;
+                result = "Manual";
+            } else if (mobilizationDate == null) {
+                onboardingDays = null;
+                result = "Manual";
+            } else {
+                onboardingDays = (int) java.time.temporal.ChronoUnit.DAYS.between(notificationDate, mobilizationDate);
+                result = onboardingDays <= 21 ? "Within 21 Days" : "More than 21 Days";
+            }
+
+            rows.add(new ActivityReplacementOnboardingReport.ReplacementOnboarding(
+                    "SLA009",
+                    outgoingResId, outgoing.getResource().getName(), outgoing.getRole(),
+                    incomingResId,
+                    incoming != null ? incoming.getResource().getName() : null,
+                    incoming != null ? incoming.getRole() : outgoing.getRole(),
+                    notificationDate, mobilizationDate, onboardingDays, result));
+        }
+        return new ActivityReplacementOnboardingReport(
+                projectId, activityId, activityName, rows.size(), rows);
     }
 
     /** The incoming resource's assignment for the replaced designation (earliest matching, else latest). */
