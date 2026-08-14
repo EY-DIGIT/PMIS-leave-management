@@ -82,6 +82,14 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
             @Param("start") LocalDate start,
             @Param("end") LocalDate end);
 
+    @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.resource.id = :resourceId "
+            + "AND a.activityId = :activityId AND a.attendanceDate BETWEEN :start AND :end")
+    Optional<LocalDate> findMinDateByResourceIdAndActivityIdAndDateBetween(
+            @Param("resourceId") Long resourceId,
+            @Param("activityId") String activityId,
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end);
+
     @Query("SELECT MIN(a.attendanceDate) FROM Attendance a WHERE a.resource.resId = :resId AND a.attendanceDate BETWEEN :start AND :end")
     Optional<LocalDate> findMinDateByResIdAndDateBetween(
             @Param("resId") String resId,

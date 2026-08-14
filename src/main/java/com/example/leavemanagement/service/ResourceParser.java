@@ -11,6 +11,7 @@ import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -79,7 +80,17 @@ public class ResourceParser {
                 int humanRow = row.getRowNum() + 1;
                 LocalDate lastDayOfWorking = readDate(
                         row.getCell(COL_LAST_DAY_OF_WORKING), evaluator, humanRow, "Last Day of Working", false);
-                String replacedByResId = text(row.getCell(COL_REPLACED_BY_RES_ID), evaluator);
+                Cell replacedByCell = row.getCell(COL_REPLACED_BY_RES_ID);
+                String replacedByResId = text(replacedByCell, evaluator);
+                if (!replacedByResId.isBlank() && looksLikeDate(replacedByCell, replacedByResId)) {
+                    throw new BadRequestException(
+                            "Column I (Replaced By Resource ID) for resource '"
+                                    + text(row.getCell(COL_RES_ID), evaluator) + "' (row " + humanRow
+                                    + ") contains a date '" + replacedByResId + "'. This column must be the "
+                                    + "incoming replacement's Attendance ID (e.g. 435), or left blank. Put the "
+                                    + "last working date in column F, and the replacement notification date in "
+                                    + "column J (Replacement Notification Date).");
+                }
                 LocalDate replacementNotifiedDate = readDate(
                         row.getCell(COL_REPLACEMENT_NOTIFIED_DATE), evaluator, humanRow,
                         "Replacement Notification Date", false);
@@ -168,6 +179,18 @@ public class ResourceParser {
 
     private CellType effectiveType(Cell cell, FormulaEvaluator evaluator) {
         return cell.getCellType() == CellType.FORMULA ? evaluator.evaluateFormulaCell(cell) : cell.getCellType();
+    }
+
+    /**
+     * True when the "Replaced By Resource ID" cell holds a date rather than a res_id — either a
+     * date-formatted numeric Excel cell, or a string like "2/10/26" / "2026-02-10". Attendance IDs
+     * never contain date separators, so this only trips on a misplaced date.
+     */
+    private boolean looksLikeDate(Cell cell, String text) {
+        if (cell != null && cell.getCellType() == CellType.NUMERIC && DateUtil.isCellDateFormatted(cell)) {
+            return true;
+        }
+        return text.trim().matches("\\d{1,4}[/-]\\d{1,2}[/-]\\d{1,4}");
     }
 
     private String text(Cell cell, FormulaEvaluator evaluator) {
