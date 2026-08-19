@@ -38,7 +38,7 @@ public class StubActivityDetailsClient implements ActivityDetailsClient {
 
 					new ActivityResourceConfig("Applications Engineer", 1, 3.0, 115420.00, LocalDate.of(2026, 1, 6)),
 					
-					new ActivityResourceConfig("Lead architect", 1, 2.0, 512000.00, LocalDate.of(2026, 2, 7))));
+					new ActivityResourceConfig("Lead architect", 1, 2.0, 512000.00, LocalDate.of(2026, 3, 7))));
 
     @Override
     public Optional<ActivityDetailsResponse> getActivityDetails(String activityId) {

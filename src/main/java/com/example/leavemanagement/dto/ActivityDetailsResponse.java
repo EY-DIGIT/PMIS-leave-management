@@ -56,6 +56,16 @@ public record ActivityDetailsResponse(
                         java.util.LinkedHashMap::new));
     }
 
+    public java.util.Map<String, java.time.LocalDate> plannedDeploymentByDesignation() {
+        return resources == null ? Map.of() : resources.stream()
+                .filter(r -> r.designation() != null && r.plannedDeploymentDate() != null)
+                .collect(Collectors.toMap(
+                        ActivityResourceConfig::designation,
+                        ActivityResourceConfig::plannedDeploymentDate,
+                        (a, b) -> a,
+                        java.util.LinkedHashMap::new));
+    }
+
     public int totalRequired() {
         return requiredByDesignation().values().stream().mapToInt(Integer::intValue).sum();
     }

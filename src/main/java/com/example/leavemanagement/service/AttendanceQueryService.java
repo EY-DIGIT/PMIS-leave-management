@@ -315,6 +315,8 @@ public class AttendanceQueryService {
         boolean hasRequirements = details.hasResources();
         Map<String, Integer> required = hasRequirements ? details.requiredByDesignation() : Map.of();
         Map<String, Double> durations = hasRequirements ? details.durationByDesignation() : Map.of();
+        Map<String, LocalDate> plannedDeployment =
+                hasRequirements ? details.plannedDeploymentByDesignation() : Map.of();
 
         List<String> resourceErrors = new ArrayList<>();
         Map<String, Integer> uploadedByDesignation = new LinkedHashMap<>();
@@ -352,13 +354,20 @@ public class AttendanceQueryService {
             }
 
             Double duration = designation != null ? durations.get(designation) : null;
-            if (duration != null && details.startDate() != null) {
-                LocalDate plannedEnd = plannedEndDate(details.startDate(), duration);
-                if (endDate.isAfter(plannedEnd)) {
+            // Anchor the planned window to the designation's PLANNED DEPLOYMENT DATE (staggered resources
+            // deploy after the activity start); fall back to the activity start when none is configured.
+            LocalDate deploymentStart = plannedDeployment.getOrDefault(designation, details.startDate());
+            if (duration != null && deploymentStart != null) {
+                LocalDate plannedEnd = plannedEndDate(deploymentStart, duration);
+                // Check the resource's OWN last attendance in this upload, not the whole batch's end date,
+                // so a resource whose real attendance stays within its window passes in a longer batch.
+                LocalDate lastAttendance = lastAttendanceDate(employee);
+                LocalDate checkDate = lastAttendance != null ? lastAttendance : endDate;
+                if (checkDate.isAfter(plannedEnd)) {
                     resourceErrors.add("Resource " + employee.attendanceId()
                             + " (designation '" + designation + "') has a planned duration of "
-                            + duration + " month(s) from " + details.startDate()
-                            + "; the attendance period end date " + endDate
+                            + duration + " month(s) from " + deploymentStart
+                            + "; attendance on " + checkDate
                             + " is beyond the planned end " + plannedEnd + ".");
                     continue;
                 }
@@ -1534,6 +1543,18 @@ public class AttendanceQueryService {
         LocalDate afterWhole = start.plusMonths(wholeMonths);
         int extraDays = (int) Math.round(fraction * afterWhole.lengthOfMonth());
         return afterWhole.plusDays(extraDays).minusDays(1);
+    }
+
+    /** The latest date an uploaded employee has any attendance record (present/worked or absent). */
+    private LocalDate lastAttendanceDate(EmployeeAttendanceByDate employee) {
+        LocalDate last = null;
+        for (LocalDate d : employee.absentDates()) {
+            if (last == null || d.isAfter(last)) last = d;
+        }
+        for (LocalDate d : employee.workedMinutesByDate().keySet()) {
+            if (last == null || d.isAfter(last)) last = d;
+        }
+        return last;
     }
 
     /**
