@@ -26,17 +26,19 @@ import lombok.Setter;
  * holidays are derived at report time from the day-of-week and {@link PublicHoliday}, rather than
  * persisted as a row per resource per day (that would be pure duplication of calendar data).
  *
- * <p>{@code (resource_id, attendance_date)} is unique, so the same resource can't have two
- * attendance facts on the same day. Re-uploading is incremental: each uploaded (resource, date) row is
- * upserted (updated if it exists, else inserted); rows for other resources/dates/months are untouched.
+ * <p>Attendance is scoped to its full context: {@code (project_id, milestone_id, activity_id,
+ * resource_id, attendance_date)} is unique. The same resource can therefore have attendance on the
+ * same day under different milestones/activities (e.g. M1/A1 and M2/A2) as separate rows. Re-uploading
+ * the same context is incremental: each uploaded (context, resource, date) row is upserted (updated if
+ * it exists, else inserted); rows for other resources/dates/months/activities are untouched.
  */
 @Entity
 @Table(
         name = "attendance",
         uniqueConstraints =
                 @UniqueConstraint(
-                        name = "uk_attendance_resource_date",
-                        columnNames = {"resource_id", "attendance_date"}))
+                        name = "uk_attendance_context_date",
+                        columnNames = {"project_id", "milestone_id", "activity_id", "resource_id", "attendance_date"}))
 @Getter
 @Setter
 public class Attendance {

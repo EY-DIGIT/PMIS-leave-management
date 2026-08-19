@@ -14,6 +14,22 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
     Optional<Attendance> findByResourceIdAndAttendanceDate(Long resourceId, LocalDate attendanceDate);
 
+    /**
+     * The existing attendance row for a resource on a date within a specific context
+     * (project + milestone + activity) — the upsert lookup, so the same resource/date under a
+     * different milestone/activity is a separate row, not an overwrite. {@code activityId} is matched
+     * null-safely (a milestone-only upload has a null activity).
+     */
+    @Query("SELECT a FROM Attendance a WHERE a.resource.id = :resourceId AND a.attendanceDate = :date "
+            + "AND a.projectId = :projectId AND a.milestoneId = :milestoneId "
+            + "AND ((:activityId IS NULL AND a.activityId IS NULL) OR a.activityId = :activityId)")
+    Optional<Attendance> findForUpsert(
+            @Param("resourceId") Long resourceId,
+            @Param("projectId") String projectId,
+            @Param("milestoneId") String milestoneId,
+            @Param("activityId") String activityId,
+            @Param("date") LocalDate date);
+
     List<Attendance> findByResourceIdAndAttendanceDateBetween(Long resourceId, LocalDate start, LocalDate end);
 
     @Query("SELECT a FROM Attendance a WHERE a.resource.id = :resourceId AND a.activityId = :activityId "

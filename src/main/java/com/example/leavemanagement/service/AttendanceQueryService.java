@@ -184,8 +184,10 @@ public class AttendanceQueryService {
                 }
                 final AttendanceStatus rowStatus = status;
                 final LocalDate rowDate = date;
+                // Upsert within the full context (project + milestone + activity) so the same resource/date
+                // under a different milestone/activity is a separate row, not an overwrite.
                 Attendance row = attendanceRepository
-                        .findByResourceIdAndAttendanceDate(resource.getId(), rowDate)
+                        .findForUpsert(resource.getId(), projectId, milestoneId, activityId, rowDate)
                         .orElseGet(() -> new Attendance(
                                 resource, projectId, organisationId, milestoneId, activityId, rowDate, rowStatus));
                 row.setProjectId(projectId);

@@ -279,7 +279,7 @@ class AttendanceQueryServiceTest {
         when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
         MasterResource resource = masterResourceRepository.findByResId("E1").orElseThrow();
         Attendance existing = new Attendance(resource, "P1", null, "M1", null, day, AttendanceStatus.A);
-        when(attendanceRepository.findByResourceIdAndAttendanceDate(1L, day)).thenReturn(Optional.of(existing));
+        when(attendanceRepository.findForUpsert(1L, "P1", "M1", null, day)).thenReturn(Optional.of(existing));
 
         service.upload("P1", null, "M1", null, day, day, null, anyFile());
 
@@ -287,6 +287,27 @@ class AttendanceQueryServiceTest {
         assertThat(existing.getStatus()).isEqualTo(AttendanceStatus.P);
         verify(attendanceRepository).save(existing);
         verify(attendanceRepository, never()).bulkDeleteByProjectIdAndDateBetween(any(), any(), any());
+    }
+
+    @Test
+    void sameResourceAndDateUnderDifferentContextInsertsSeparateRow() {
+        // Bug fix: the same resource/date under a different milestone/activity must NOT overwrite the
+        // existing row. Upsert is scoped to (project, milestone, activity); an empty lookup → new row.
+        LocalDate day = LocalDate.of(2026, 7, 1);
+        when(parser.parse(any(), any(), any()))
+                .thenReturn(List.of(new EmployeeAttendanceByDate("E1", "Asha", "Dev", Set.of(), Map.of(day, 480))));
+        stubActiveResource("E1", "P1", 1L);
+        when(leavePolicyClient.getLeavePolicy("P1")).thenReturn(Optional.of(
+                new LeavePolicyResponse(4, 8, "HALF_DAY", "FULL_DAY", true, true, 2, "MONTHLY", true, false, true, true)));
+        when(holidayRepository.findByHolidayDateBetweenOrderByHolidayDateAsc(any(), any())).thenReturn(List.of());
+        // In the M2 context there is no existing row → a fresh row is inserted (the M1 row is untouched).
+        when(attendanceRepository.findForUpsert(1L, "P1", "M2", null, day)).thenReturn(Optional.empty());
+
+        service.upload("P1", null, "M2", null, day, day, null, anyFile());
+
+        ArgumentCaptor<Attendance> captor = ArgumentCaptor.forClass(Attendance.class);
+        verify(attendanceRepository).save(captor.capture());
+        assertThat(captor.getValue().getMilestoneId()).isEqualTo("M2");
     }
 
     @Test
