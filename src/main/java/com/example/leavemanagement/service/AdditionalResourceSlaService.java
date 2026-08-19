@@ -2,15 +2,12 @@ package com.example.leavemanagement.service;
 
 import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.dto.ActivityAdditionalResourceReport;
-import com.example.leavemanagement.dto.ActivityBaselineRow;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.ActivityResourceConfig;
-import com.example.leavemanagement.entity.ActivityBaseline;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
 import com.example.leavemanagement.exception.BadRequestException;
 import com.example.leavemanagement.exception.NotFoundException;
-import com.example.leavemanagement.repository.ActivityBaselineRepository;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import java.time.LocalDate;
@@ -27,13 +24,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * UIDAI SLA 008 (Additional Resource Onboarding), implemented in isolation from the rest of the
- * attendance/leave/cost logic. An additional resource is one created when an activity's approved
- * resource requirement increases over its stored baseline — a new designation, or a higher quantity
- * for an already-configured designation. Replacements (SLA 006 / SLA 009) are excluded.
+ * attendance/leave/cost logic. Additional resources are identified directly from the activity
+ * configuration's {@code resourceClassification} field: a config line marked "additional" is an
+ * approved additional requirement (a "planned" line is the baseline). Replacements (SLA 006 / SLA 009)
+ * are excluded.
  *
- * <p>K (start) = the designation's planned deployment date; L (actual) = the additional resource's
- * first attendance date on the activity; result is derived from {@code L − K} in calendar days. No
- * severity is assigned.
+ * <p>K (start) = the additional line's planned deployment date; L (actual) = the additional resource's
+ * first attendance date on the activity; result is derived from {@code L − K} in calendar days:
+ * {@code <=21} "Within 21 Days", {@code 22..28} "More than 21 Days and within 28 Days", {@code >28}
+ * "More than 28 Days", or "Pending Onboarding" (no attendance yet). No severity is assigned.
  */
 @Service
 public class AdditionalResourceSlaService {
@@ -41,69 +40,46 @@ public class AdditionalResourceSlaService {
     private final ActivityDetailsClient activityDetailsClient;
     private final AttendanceRepository attendanceRepository;
     private final ProjectResourceRepository projectResourceRepository;
-    private final ActivityBaselineRepository baselineRepository;
 
     public AdditionalResourceSlaService(
             ActivityDetailsClient activityDetailsClient,
             AttendanceRepository attendanceRepository,
-            ProjectResourceRepository projectResourceRepository,
-            ActivityBaselineRepository baselineRepository) {
+            ProjectResourceRepository projectResourceRepository) {
         this.activityDetailsClient = activityDetailsClient;
         this.attendanceRepository = attendanceRepository;
         this.projectResourceRepository = projectResourceRepository;
-        this.baselineRepository = baselineRepository;
     }
 
-    /**
-     * Captures (snapshots) the activity's current live configuration as the SLA 008 baseline — the
-     * "original approved requirement" to compare future increases against. When {@code force} is false
-     * and a baseline already exists it is preserved (returned unchanged); {@code force=true} re-captures
-     * it from the current config. Capture this at original-config time, before any increase is approved.
-     */
-    @Transactional
-    public List<ActivityBaselineRow> captureBaseline(String activityId, boolean force) {
-        ActivityDetailsResponse activity = requireActivity(activityId);
-        if (baselineRepository.existsByActivityId(activityId)) {
-            if (!force) {
-                return currentBaseline(activityId);
-            }
-            baselineRepository.deleteByActivityId(activityId);
-        }
-        Map<String, LocalDate> plannedByDesignation = plannedByDesignation(activity);
-        activity.requiredByDesignation().forEach((designation, quantity) ->
-                baselineRepository.save(new ActivityBaseline(
-                        activityId, designation, quantity, plannedByDesignation.get(designation))));
-        return currentBaseline(activityId);
-    }
-
-    /** The stored baseline for an activity (empty if never captured). */
+    /** SLA 008 report for one activity: one row per additional resource (or unfilled additional slot). */
     @Transactional(readOnly = true)
-    public List<ActivityBaselineRow> getBaseline(String activityId) {
-        return currentBaseline(activityId);
-    }
-
-    /**
-     * SLA 008 report for one activity: one row per additional resource (or unfilled additional slot).
-     * If no baseline was captured yet, the current config is snapshotted as the baseline first (so the
-     * report self-initialises and only shows additions made after this point).
-     */
-    @Transactional
     public ActivityAdditionalResourceReport additionalResourceOnboarding(String projectId, String activityId) {
-        ActivityDetailsResponse activity = requireActivity(activityId);
+        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
+                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
+        if (activity.startDate() == null || activity.endDate() == null) {
+            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
+        }
         LocalDate aStart = activity.startDate();
         LocalDate aEnd = activity.endDate();
         String activityName = activity.activityName() != null ? activity.activityName() : activityId;
 
-        // Baseline: auto-capture the current config the first time so increases are tracked from here on.
-        if (!baselineRepository.existsByActivityId(activityId)) {
-            captureBaseline(activityId, false);
+        // Split the activity config into planned vs additional quantities per designation (from the
+        // resourceClassification field). K = the additional line's planned deployment date.
+        Map<String, Integer> plannedQty = new LinkedHashMap<>();
+        Map<String, Integer> additionalQty = new LinkedHashMap<>();
+        Map<String, LocalDate> additionalPlanned = new LinkedHashMap<>();
+        for (ActivityResourceConfig c : activity.resources() == null ? List.<ActivityResourceConfig>of() : activity.resources()) {
+            if (c.designation() == null || c.quantity() == null) {
+                continue;
+            }
+            if (c.isAdditional()) {
+                additionalQty.merge(c.designation(), c.quantity(), Integer::sum);
+                if (c.plannedDeploymentDate() != null) {
+                    additionalPlanned.putIfAbsent(c.designation(), c.plannedDeploymentDate());
+                }
+            } else {
+                plannedQty.merge(c.designation(), c.quantity(), Integer::sum);
+            }
         }
-        Map<String, Integer> baselineQty = baselineRepository.findByActivityId(activityId).stream()
-                .collect(Collectors.toMap(ActivityBaseline::getDesignation, ActivityBaseline::getQuantity,
-                        (a, b) -> a, LinkedHashMap::new));
-
-        Map<String, Integer> currentQty = activity.requiredByDesignation();
-        Map<String, LocalDate> plannedByDesignation = plannedByDesignation(activity);
 
         // Resources that joined as a replacement fill an existing slot — never an additional one.
         Set<String> replacementIncomings = projectResourceRepository.findByProjectId(projectId).stream()
@@ -134,16 +110,18 @@ public class AdditionalResourceSlaService {
                         Comparator.nullsLast(Comparator.naturalOrder()))));
 
         List<ActivityAdditionalResourceReport.AdditionalResource> rows = new ArrayList<>();
-        for (Map.Entry<String, Integer> entry : currentQty.entrySet()) {
+        for (Map.Entry<String, Integer> entry : additionalQty.entrySet()) {
             String designation = entry.getKey();
-            int current = entry.getValue();
-            int original = baselineQty.getOrDefault(designation, 0);
-            int additional = Math.max(0, current - original);
-            if (additional == 0) {
+            int additional = entry.getValue();
+            if (additional <= 0) {
                 continue;
             }
-            LocalDate plannedDeployment = plannedByDesignation.getOrDefault(designation, aStart);
+            int original = plannedQty.getOrDefault(designation, 0);
+            int current = original + additional;
+            LocalDate plannedDeployment = additionalPlanned.getOrDefault(designation, aStart);
 
+            // Planned occupants (the first `original` by first-attendance) fill the baseline slots;
+            // the next `additional` are the additional resources.
             List<ResourceOnboarding> eligible = actualByDesignation.getOrDefault(designation, List.of());
             int startIdx = Math.min(original, eligible.size());
             int endIdx = Math.min(original + additional, eligible.size());
@@ -173,33 +151,6 @@ public class AdditionalResourceSlaService {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
-
-    private ActivityDetailsResponse requireActivity(String activityId) {
-        ActivityDetailsResponse activity = activityDetailsClient.getActivityDetails(activityId)
-                .orElseThrow(() -> new NotFoundException("No activity found with id '" + activityId + "'"));
-        if (activity.startDate() == null || activity.endDate() == null) {
-            throw new BadRequestException("Activity '" + activityId + "' has no start/end date.");
-        }
-        return activity;
-    }
-
-    private List<ActivityBaselineRow> currentBaseline(String activityId) {
-        return baselineRepository.findByActivityId(activityId).stream()
-                .map(b -> new ActivityBaselineRow(b.getDesignation(), b.getQuantity(), b.getPlannedDeploymentDate()))
-                .toList();
-    }
-
-    private Map<String, LocalDate> plannedByDesignation(ActivityDetailsResponse activity) {
-        Map<String, LocalDate> map = new LinkedHashMap<>();
-        if (activity.resources() != null) {
-            for (ActivityResourceConfig r : activity.resources()) {
-                if (r.designation() != null && r.plannedDeploymentDate() != null) {
-                    map.putIfAbsent(r.designation(), r.plannedDeploymentDate());
-                }
-            }
-        }
-        return map;
-    }
 
     private String resolveRole(String resId, String projectId) {
         return projectResourceRepository.findByResource_ResIdAndProjectIdAndActiveTrue(resId, projectId)

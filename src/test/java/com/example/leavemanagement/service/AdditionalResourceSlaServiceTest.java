@@ -9,10 +9,8 @@ import com.example.leavemanagement.client.ActivityDetailsClient;
 import com.example.leavemanagement.dto.ActivityAdditionalResourceReport;
 import com.example.leavemanagement.dto.ActivityDetailsResponse;
 import com.example.leavemanagement.dto.ActivityResourceConfig;
-import com.example.leavemanagement.entity.ActivityBaseline;
 import com.example.leavemanagement.entity.MasterResource;
 import com.example.leavemanagement.entity.ProjectResource;
-import com.example.leavemanagement.repository.ActivityBaselineRepository;
 import com.example.leavemanagement.repository.AttendanceRepository;
 import com.example.leavemanagement.repository.ProjectResourceRepository;
 import java.time.LocalDate;
@@ -33,8 +31,6 @@ class AdditionalResourceSlaServiceTest {
     private AttendanceRepository attendanceRepository;
     @Mock
     private ProjectResourceRepository projectResourceRepository;
-    @Mock
-    private ActivityBaselineRepository baselineRepository;
 
     private AdditionalResourceSlaService service;
 
@@ -44,7 +40,7 @@ class AdditionalResourceSlaServiceTest {
     @BeforeEach
     void setUp() {
         service = new AdditionalResourceSlaService(
-                activityDetailsClient, attendanceRepository, projectResourceRepository, baselineRepository);
+                activityDetailsClient, attendanceRepository, projectResourceRepository);
     }
 
     private MasterResource resource(String resId, long id, String name) {
@@ -60,11 +56,9 @@ class AdditionalResourceSlaServiceTest {
         return r;
     }
 
-    private void stubActivityWithProgramManager(int currentQty) {
+    private void stubActivity(ActivityResourceConfig... resources) {
         when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
-                new ActivityDetailsResponse("D9", A_START, A_END,
-                        List.of(new ActivityResourceConfig(
-                                "Program Manager", currentQty, 3.0, 198764.0, LocalDate.of(2026, 8, 1))))));
+                new ActivityDetailsResponse("D9", A_START, A_END, List.of(resources))));
     }
 
     private void stubRole(String resId, ProjectResource assignment) {
@@ -73,13 +67,55 @@ class AdditionalResourceSlaServiceTest {
     }
 
     @Test
-    void quantityIncreaseMarksSecondResourceAsAdditionalAndComputesSla008() {
-        // Baseline PM=1, current PM=2 → additional 1. K=01-Aug, additional joins 15-Aug → 14 days → Within 21.
-        stubActivityWithProgramManager(2);
-        when(baselineRepository.existsByActivityId("A1")).thenReturn(true);
-        when(baselineRepository.findByActivityId("A1")).thenReturn(List.of(
-                new ActivityBaseline("A1", "Program Manager", 1, LocalDate.of(2026, 8, 1))));
-        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of()); // no replacements
+    void newAdditionalDesignationIsReportedWithSla008() {
+        // Lead architect classified "additional" (K=07-Mar). Joins 15-Mar → 8 days → Within 21 Days.
+        stubActivity(
+                new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0, LocalDate.of(2026, 1, 6), "planned"),
+                new ActivityResourceConfig("Lead architect", 1, 2.0, 512000.0, LocalDate.of(2026, 3, 7), "additional"));
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of());
+
+        MasterResource lead = resource("500", 2L, "New Lead");
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(List.of(lead));
+        stubRole("500", new ProjectResource(lead, "P1", "Lead architect", LocalDate.of(2026, 3, 7)));
+        when(attendanceRepository.findMinDateByResourceIdAndActivityIdAndDateBetween(eq(2L), eq("A1"), any(), any()))
+                .thenReturn(Optional.of(LocalDate.of(2026, 3, 15)));
+
+        ActivityAdditionalResourceReport report = service.additionalResourceOnboarding("P1", "A1");
+
+        assertThat(report.additionalResources()).hasSize(1);
+        ActivityAdditionalResourceReport.AdditionalResource r = report.additionalResources().get(0);
+        assertThat(r.slaNumber()).isEqualTo("SLA008");
+        assertThat(r.designation()).isEqualTo("Lead architect");
+        assertThat(r.originalQuantity()).isZero();
+        assertThat(r.additionalQuantity()).isEqualTo(1);
+        assertThat(r.resId()).isEqualTo("500");
+        assertThat(r.plannedDeploymentDate()).isEqualTo(LocalDate.of(2026, 3, 7));
+        assertThat(r.actualOnboardingDate()).isEqualTo(LocalDate.of(2026, 3, 15));
+        assertThat(r.onboardingDays()).isEqualTo(8);
+        assertThat(r.slaResult()).isEqualTo("Within 21 Days");
+    }
+
+    @Test
+    void plannedOnlyConfigHasNoAdditionalRows() {
+        stubActivity(
+                new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0, LocalDate.of(2026, 1, 6), "planned"),
+                new ActivityResourceConfig("Cloud Architect", 1, 3.0, 211982.0, LocalDate.of(2026, 1, 6))); // null → planned
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of());
+        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
+                .thenReturn(List.of());
+
+        assertThat(service.additionalResourceOnboarding("P1", "A1").additionalResources()).isEmpty();
+    }
+
+    @Test
+    void quantityIncreaseSecondResourceIsAdditional() {
+        // PM has a "planned" line (qty 1) AND an "additional" line (qty 1) → additional 1, original 1.
+        // The second PM by first-attendance is the additional; K=01-Aug, joins 25-Aug → 24 days → 22-28 band.
+        stubActivity(
+                new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0, LocalDate.of(2026, 1, 6), "planned"),
+                new ActivityResourceConfig("Program Manager", 1, 3.0, 198764.0, LocalDate.of(2026, 8, 1), "additional"));
+        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of());
 
         MasterResource original = resource("427", 1L, "Kuldeep");
         MasterResource additional = resource("500", 2L, "New PM");
@@ -90,88 +126,33 @@ class AdditionalResourceSlaServiceTest {
         when(attendanceRepository.findMinDateByResourceIdAndActivityIdAndDateBetween(eq(1L), eq("A1"), any(), any()))
                 .thenReturn(Optional.of(LocalDate.of(2026, 1, 7)));
         when(attendanceRepository.findMinDateByResourceIdAndActivityIdAndDateBetween(eq(2L), eq("A1"), any(), any()))
-                .thenReturn(Optional.of(LocalDate.of(2026, 8, 15)));
+                .thenReturn(Optional.of(LocalDate.of(2026, 8, 25)));
 
-        ActivityAdditionalResourceReport report = service.additionalResourceOnboarding("P1", "A1");
-
-        assertThat(report.additionalResources()).hasSize(1);
-        ActivityAdditionalResourceReport.AdditionalResource r = report.additionalResources().get(0);
-        assertThat(r.slaNumber()).isEqualTo("SLA008");
-        assertThat(r.designation()).isEqualTo("Program Manager");
+        ActivityAdditionalResourceReport.AdditionalResource r =
+                service.additionalResourceOnboarding("P1", "A1").additionalResources().get(0);
         assertThat(r.originalQuantity()).isEqualTo(1);
         assertThat(r.currentApprovedQuantity()).isEqualTo(2);
         assertThat(r.additionalQuantity()).isEqualTo(1);
         assertThat(r.resId()).isEqualTo("500");
-        assertThat(r.plannedDeploymentDate()).isEqualTo(LocalDate.of(2026, 8, 1));
-        assertThat(r.actualOnboardingDate()).isEqualTo(LocalDate.of(2026, 8, 15));
-        assertThat(r.onboardingDays()).isEqualTo(14);
-        assertThat(r.slaResult()).isEqualTo("Within 21 Days");
-    }
-
-    @Test
-    void noAdditionalWhenQuantityUnchanged() {
-        stubActivityWithProgramManager(1); // current == baseline
-        when(baselineRepository.existsByActivityId("A1")).thenReturn(true);
-        when(baselineRepository.findByActivityId("A1")).thenReturn(List.of(
-                new ActivityBaseline("A1", "Program Manager", 1, LocalDate.of(2026, 8, 1))));
-        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of());
-        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
-                .thenReturn(List.of());
-
-        ActivityAdditionalResourceReport report = service.additionalResourceOnboarding("P1", "A1");
-        assertThat(report.additionalResources()).isEmpty();
+        assertThat(r.onboardingDays()).isEqualTo(24);
+        assertThat(r.slaResult()).isEqualTo("More than 21 Days and within 28 Days");
     }
 
     @Test
     void additionalSlotWithNoAttendanceIsPendingOnboarding() {
-        // Baseline PM=1, current PM=2 → additional 1, but only the original has attendance → 1 pending slot.
-        stubActivityWithProgramManager(2);
-        when(baselineRepository.existsByActivityId("A1")).thenReturn(true);
-        when(baselineRepository.findByActivityId("A1")).thenReturn(List.of(
-                new ActivityBaseline("A1", "Program Manager", 1, LocalDate.of(2026, 9, 1))));
+        stubActivity(
+                new ActivityResourceConfig("Lead architect", 1, 2.0, 512000.0, LocalDate.of(2026, 3, 7), "additional"));
         when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of());
-
-        MasterResource original = resource("427", 1L, "Kuldeep");
         when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
-                .thenReturn(List.of(original));
-        stubRole("427", new ProjectResource(original, "P1", "Program Manager", LocalDate.of(2026, 1, 1)));
-        when(attendanceRepository.findMinDateByResourceIdAndActivityIdAndDateBetween(eq(1L), eq("A1"), any(), any()))
-                .thenReturn(Optional.of(LocalDate.of(2026, 1, 7)));
+                .thenReturn(List.of()); // nobody onboarded yet
 
-        ActivityAdditionalResourceReport report = service.additionalResourceOnboarding("P1", "A1");
-
-        assertThat(report.additionalResources()).hasSize(1);
-        ActivityAdditionalResourceReport.AdditionalResource r = report.additionalResources().get(0);
+        ActivityAdditionalResourceReport.AdditionalResource r =
+                service.additionalResourceOnboarding("P1", "A1").additionalResources().get(0);
+        assertThat(r.designation()).isEqualTo("Lead architect");
+        assertThat(r.additionalQuantity()).isEqualTo(1);
         assertThat(r.resId()).isNull();
         assertThat(r.actualOnboardingDate()).isNull();
         assertThat(r.onboardingDays()).isNull();
         assertThat(r.slaResult()).isEqualTo("Pending Onboarding");
-    }
-
-    @Test
-    void newDesignationIsEntirelyAdditionalWith28DayBoundary() {
-        // Business Architect not in baseline → all current qty (1) is additional.
-        // K=01-Aug, L=29-Aug → 28 days → "More than 21 Days and within 28 Days".
-        when(activityDetailsClient.getActivityDetails("A1")).thenReturn(Optional.of(
-                new ActivityDetailsResponse("D9", A_START, A_END,
-                        List.of(new ActivityResourceConfig(
-                                "Business Architect", 1, 3.0, 512000.0, LocalDate.of(2026, 8, 1))))));
-        when(baselineRepository.existsByActivityId("A1")).thenReturn(true);
-        when(baselineRepository.findByActivityId("A1")).thenReturn(List.of()); // baseline had no Business Architect
-        when(projectResourceRepository.findByProjectId("P1")).thenReturn(List.of());
-
-        MasterResource ba = resource("600", 3L, "Arch");
-        when(attendanceRepository.findDistinctResourcesByActivityIdAndDateBetween(eq("A1"), any(), any()))
-                .thenReturn(List.of(ba));
-        stubRole("600", new ProjectResource(ba, "P1", "Business Architect", LocalDate.of(2026, 8, 1)));
-        when(attendanceRepository.findMinDateByResourceIdAndActivityIdAndDateBetween(eq(3L), eq("A1"), any(), any()))
-                .thenReturn(Optional.of(LocalDate.of(2026, 8, 29)));
-
-        ActivityAdditionalResourceReport.AdditionalResource r =
-                service.additionalResourceOnboarding("P1", "A1").additionalResources().get(0);
-        assertThat(r.originalQuantity()).isZero();
-        assertThat(r.additionalQuantity()).isEqualTo(1);
-        assertThat(r.onboardingDays()).isEqualTo(28);
-        assertThat(r.slaResult()).isEqualTo("More than 21 Days and within 28 Days");
     }
 }
