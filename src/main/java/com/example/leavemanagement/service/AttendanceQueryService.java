@@ -996,9 +996,11 @@ public class AttendanceQueryService {
         int sandwichDays       = calc.sandwichDays();
         // Total leave taken = paid + unpaid + sandwich (sandwich-charged holiday/weekend days included).
         double leaveTaken = paidLeaveDays + unpaidLeaveDays + sandwichDays;
-
+        // Present + paid leave can never account for more than the full working-day baseline, so cap at
+        // 100% (attendance is derived from uploaded rows while workingDays is calendar-derived, and the
+        // two day-sets can differ, which would otherwise push the ratio above 100%).
         double attendancePercentage = workingDays > 0
-                ? Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0
+                ?  Math.min(100.0, Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0)
                 : 0d;
 
         int calendarDays = (int) (end.toEpochDay() - start.toEpochDay()) + 1;
@@ -1667,8 +1669,9 @@ public class AttendanceQueryService {
         int sandwichDays = leaveCalc.sandwichDays();
         // Total leave taken = paid + unpaid + sandwich.
         double leaveTaken = paidLeaveDays + unpaidLeaveDays + sandwichDays;
+        // Cap at 100%: present + paid leave cannot exceed the working-day baseline (see note above).
         double attendancePercentage = workingDays > 0
-                ? Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0
+                ? Math.min(100.0, Math.round((presentDays + paidLeaveDays) * 10000.0 / workingDays) / 100.0)
                 : 0d;
 
         int calendarDays = (int) (end.toEpochDay() - start.toEpochDay()) + 1;
